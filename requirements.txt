@@ -6,7 +6,7 @@ requests>=2.28.0  # Added for Google Sheets integration
 
 # PDF generation and manipulation
 reportlab>=3.6.0
-fpdf>=2.5.0
+fpdf2>=2.5.0
 PyMuPDF>=1.21.0 # aka fitz
 
 # Images and barcode support
