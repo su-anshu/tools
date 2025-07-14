@@ -1,31 +1,31 @@
 # Core app
-streamlit>=1.28.0
-pandas>=1.5.0
-openpyxl>=3.0.0
-requests>=2.28.0  # Added for Google Sheets integration
+streamlit
+pandas
+openpyxl
+requests
 
 # PDF generation and manipulation
-reportlab>=3.6.0
-fpdf2>=2.5.0
-PyMuPDF>=1.21.0 # aka fitz
+reportlab
+fpdf2
+PyMuPDF
 
 # Images and barcode support
-Pillow>=9.0.0
-python-barcode[images]>=0.14.0  # For Code 128A FNSKU barcode generation (Amazon standard)
+Pillow
+python-barcode[images]
 
 # Date handling
-python-dateutil>=2.8.0
+python-dateutil
 
 # Optional, for consistent random batch codes
-numpy>=1.21.0
+numpy
 
 # PDF to image conversion
-pdf2image>=3.1.0
+pdf2image
 
 # Additional barcode support
-qrcode[pil]>=7.4.0
+qrcode[pil]
 
 # Font handling
-fonttools>=4.0.0
+fonttools
 
 
