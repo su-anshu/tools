@@ -1,0 +1,45 @@
+# Streamlit Configuration for Mithila Tools Dashboard
+# This file configures Streamlit for optimal deployment and performance
+
+[global]
+# Development mode settings
+developmentMode = false
+
+[server]
+# Server configuration for deployment
+headless = true
+enableCORS = true
+enableXsrfProtection = true
+
+# File upload settings - CRITICAL for tools that handle Excel/PDF files
+maxUploadSize = 200  # 200MB limit for large Excel files and PDFs
+maxMessageSize = 200  # 200MB for large messages
+
+# Performance settings for deployment
+runOnSave = false
+fileWatcherType = "none"
+
+# Port configuration
+port = 8501
+
+[browser]
+# Browser settings for deployment
+gatherUsageStats = false
+
+[theme]
+# Theme settings for consistent appearance
+primaryColor = "#FF6B6B"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+font = "sans serif"
+
+[runner]
+# Script runner configuration for performance
+magicEnabled = true
+fastReruns = true
+
+[logger]
+# Logging configuration
+level = "info"
+messageFormat = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
