@@ -75,10 +75,18 @@ ehthumbs.db
 Thumbs.db
 
 # Data files (temporary and generated)
-data/
+data/*.xlsx
+data/*.xls
+data/temp_*
+data/latest_*
 temp/
 *.tmp
 *.temp
+
+# Keep essential data files
+!data/master_fnsku.pdf
+!data/master_meta.txt
+!data/master_sheet_url.txt
 
 # Logs
 *.log

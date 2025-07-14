@@ -27,6 +27,13 @@ os.chdir(project_root)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Initialize default data files if missing (for deployment)
+try:
+    from app.default_data import ensure_data_files
+    ensure_data_files()
+except Exception as e:
+    logger.warning(f"Could not initialize default data files: {e}")
+
 # Configure Streamlit page
 st.set_page_config(page_title="📦 Mithila Tools Dashboard", layout="wide")
 
