@@ -883,10 +883,44 @@ def label_generator_tool():
                         st.markdown("#### 🧾 Combined MRP + Barcode Labels")
                         
                         # Create tabs for different methods
-                        tab1, tab2 = st.tabs(["📄 Direct Generation (Recommended)", "🗂️ PDF Method"])
+                        tab1, tab2 = st.tabs(["�️ PDF Method (Default)", "� Direct Generation"])
                         
                         with tab1:
-                            st.caption("✅ Amazon-compliant Code 128A barcodes generated directly")
+                            st.caption("✅ Uses existing barcode PDF file from sidebar")
+                            
+                            # Extract barcode
+                            barcode = extract_fnsku_page(fnsku_code, BARCODE_PDF_PATH)
+                            if barcode:
+                                col1, col2 = st.columns(2)  # Changed from 3 to 2 columns
+                                
+                                with col1:
+                                    st.markdown("**Barcode Only**")
+                                    st.download_button(
+                                        "📦 Download", 
+                                        data=barcode, 
+                                        file_name=f"{fnsku_code}_barcode_pdf.pdf", 
+                                        mime="application/pdf",
+                                        use_container_width=True
+                                    )
+                                
+                                with col2:
+                                    st.markdown("**Horizontal (96×25mm)**")
+                                    combined = generate_combined_label_pdf(filtered_df, fnsku_code, BARCODE_PDF_PATH)
+                                    if combined:
+                                        st.download_button(
+                                            "🧾 Download", 
+                                            data=combined, 
+                                            file_name=f"{safe_name}_Horizontal_PDF.pdf", 
+                                            mime="application/pdf",
+                                            use_container_width=True
+                                        )
+                                    else:
+                                        st.error("Generation failed")
+                            else:
+                                st.warning(f"⚠️ FNSKU {fnsku_code} not found in barcode PDF")
+                        
+                        with tab2:
+                            st.caption("Amazon-compliant Code 128A barcodes generated directly")
                             
                             col1, col2 = st.columns(2)  # Changed from 3 to 2 columns
                             
@@ -919,40 +953,6 @@ def label_generator_tool():
                                     )
                                 else:
                                     st.error("Generation failed")
-                        
-                        with tab2:
-                            st.caption("Uses existing barcode PDF file from sidebar")
-                            
-                            # Extract barcode
-                            barcode = extract_fnsku_page(fnsku_code, BARCODE_PDF_PATH)
-                            if barcode:
-                                col1, col2 = st.columns(2)  # Changed from 3 to 2 columns
-                                
-                                with col1:
-                                    st.markdown("**Barcode Only**")
-                                    st.download_button(
-                                        "📦 Download", 
-                                        data=barcode, 
-                                        file_name=f"{fnsku_code}_barcode_pdf.pdf", 
-                                        mime="application/pdf",
-                                        use_container_width=True
-                                    )
-                                
-                                with col2:
-                                    st.markdown("**Horizontal (96×25mm)**")
-                                    combined = generate_combined_label_pdf(filtered_df, fnsku_code, BARCODE_PDF_PATH)
-                                    if combined:
-                                        st.download_button(
-                                            "🧾 Download", 
-                                            data=combined, 
-                                            file_name=f"{safe_name}_Horizontal_PDF.pdf", 
-                                            mime="application/pdf",
-                                            use_container_width=True
-                                        )
-                                    else:
-                                        st.error("Generation failed")
-                            else:
-                                st.warning(f"⚠️ FNSKU {fnsku_code} not found in barcode PDF")
                         
                         st.markdown("---")
                     else:
@@ -1009,36 +1009,10 @@ def label_generator_tool():
                                     st.caption("No barcode available")
                             
                             # Generation tabs
-                            tab1, tab2 = st.tabs(["📄 Direct Generation (Recommended)", "🗂️ PDF Method"])
+                            tab1, tab2 = st.tabs(["�️ PDF Method (Default)", "� Direct Generation"])
                             
                             with tab1:
-                                st.caption("✅ Amazon-compliant Code 128A barcodes generated directly")
-                                
-                                # Generate button centered
-                                if st.button("🧾 Generate Triple Label", key="direct_triple", use_container_width=True):
-                                    with st.spinner("🔄 Generating (Direct)..."):
-                                        triple_pdf = generate_triple_label_combined(
-                                            filtered_df, 
-                                            nutrition_row, 
-                                            selected_product,
-                                            method="direct"
-                                        )
-                                        
-                                        if triple_pdf:
-                                            st.success("✅ Ready!")
-                                            st.download_button(
-                                                "📥 Download Triple Label", 
-                                                data=triple_pdf, 
-                                                file_name=f"{safe_name}_{selected_weight}_Triple_Direct.pdf", 
-                                                mime="application/pdf",
-                                                use_container_width=True,
-                                                key="download_direct_triple"
-                                            )
-                                        else:
-                                            st.error("❌ Generation failed")
-                            
-                            with tab2:
-                                st.caption("Uses existing barcode PDF file from sidebar")
+                                st.caption("✅ Uses existing barcode PDF file from sidebar")
                                 
                                 if os.path.exists(BARCODE_PDF_PATH):
                                     col1, col2 = st.columns([2, 1])
@@ -1073,6 +1047,32 @@ def label_generator_tool():
                                 else:
                                     st.warning("⚠️ Barcode PDF not available")
                                     st.caption("Please upload barcode PDF via sidebar to use this method")
+                            
+                            with tab2:
+                                st.caption("Amazon-compliant Code 128A barcodes generated directly")
+                                
+                                # Generate button centered
+                                if st.button("🧾 Generate Triple Label", key="direct_triple", use_container_width=True):
+                                    with st.spinner("🔄 Generating (Direct)..."):
+                                        triple_pdf = generate_triple_label_combined(
+                                            filtered_df, 
+                                            nutrition_row, 
+                                            selected_product,
+                                            method="direct"
+                                        )
+                                        
+                                        if triple_pdf:
+                                            st.success("✅ Ready!")
+                                            st.download_button(
+                                                "📥 Download Triple Label", 
+                                                data=triple_pdf, 
+                                                file_name=f"{safe_name}_{selected_weight}_Triple_Direct.pdf", 
+                                                mime="application/pdf",
+                                                use_container_width=True,
+                                                key="download_direct_triple"
+                                            )
+                                        else:
+                                            st.error("❌ Generation failed")
                     else:
                         st.error("❌ Could not load nutrition data")
                         st.caption("Check internet connection")
