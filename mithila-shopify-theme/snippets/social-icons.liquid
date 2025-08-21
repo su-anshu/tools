@@ -1,0 +1,88 @@
+{%- liquid
+  assign social_icons = 'facebook,instagram,youtube,tiktok,twitter,pinterest,snapchat,tumblr,vimeo' | split: ','
+  assign has_social_icons = false
+  for icon in social_icons
+    assign icon_setting = 'social_' | append: icon | append: '_link'
+    if settings[icon_setting] != blank
+      assign has_social_icons = true
+      break
+    endif
+  endfor
+-%}
+
+{%- if has_social_icons -%}
+  <ul class="list-unstyled list-social {{ class }}" role="list">
+    {%- if settings.social_facebook_link != blank -%}
+      <li class="list-social__item">
+        <a href="{{ settings.social_facebook_link }}" class="list-social__link link" target="_blank" rel="noopener">
+          {%- render 'icon-facebook' -%}
+          <span class="visually-hidden">{{ 'general.social.alt_text.share_on_facebook' | t }}</span>
+        </a>
+      </li>
+    {%- endif -%}
+    {%- if settings.social_instagram_link != blank -%}
+      <li class="list-social__item">
+        <a href="{{ settings.social_instagram_link }}" class="list-social__link link" target="_blank" rel="noopener">
+          {%- render 'icon-instagram' -%}
+          <span class="visually-hidden">{{ 'general.social.alt_text.share_on_instagram' | t }}</span>
+        </a>
+      </li>
+    {%- endif -%}
+    {%- if settings.social_youtube_link != blank -%}
+      <li class="list-social__item">
+        <a href="{{ settings.social_youtube_link }}" class="list-social__link link" target="_blank" rel="noopener">
+          {%- render 'icon-youtube' -%}
+          <span class="visually-hidden">{{ 'general.social.alt_text.share_on_youtube' | t }}</span>
+        </a>
+      </li>
+    {%- endif -%}
+    {%- if settings.social_tiktok_link != blank -%}
+      <li class="list-social__item">
+        <a href="{{ settings.social_tiktok_link }}" class="list-social__link link" target="_blank" rel="noopener">
+          {%- render 'icon-tiktok' -%}
+          <span class="visually-hidden">{{ 'general.social.alt_text.share_on_tiktok' | t }}</span>
+        </a>
+      </li>
+    {%- endif -%}
+    {%- if settings.social_twitter_link != blank -%}
+      <li class="list-social__item">
+        <a href="{{ settings.social_twitter_link }}" class="list-social__link link" target="_blank" rel="noopener">
+          {%- render 'icon-twitter' -%}
+          <span class="visually-hidden">{{ 'general.social.alt_text.share_on_twitter' | t }}</span>
+        </a>
+      </li>
+    {%- endif -%}
+    {%- if settings.social_pinterest_link != blank -%}
+      <li class="list-social__item">
+        <a href="{{ settings.social_pinterest_link }}" class="list-social__link link" target="_blank" rel="noopener">
+          {%- render 'icon-pinterest' -%}
+          <span class="visually-hidden">{{ 'general.social.alt_text.share_on_pinterest' | t }}</span>
+        </a>
+      </li>
+    {%- endif -%}
+    {%- if settings.social_snapchat_link != blank -%}
+      <li class="list-social__item">
+        <a href="{{ settings.social_snapchat_link }}" class="list-social__link link" target="_blank" rel="noopener">
+          {%- render 'icon-snapchat' -%}
+          <span class="visually-hidden">{{ 'general.social.alt_text.share_on_snapchat' | t }}</span>
+        </a>
+      </li>
+    {%- endif -%}
+    {%- if settings.social_tumblr_link != blank -%}
+      <li class="list-social__item">
+        <a href="{{ settings.social_tumblr_link }}" class="list-social__link link" target="_blank" rel="noopener">
+          {%- render 'icon-tumblr' -%}
+          <span class="visually-hidden">{{ 'general.social.alt_text.share_on_tumblr' | t }}</span>
+        </a>
+      </li>
+    {%- endif -%}
+    {%- if settings.social_vimeo_link != blank -%}
+      <li class="list-social__item">
+        <a href="{{ settings.social_vimeo_link }}" class="list-social__link link" target="_blank" rel="noopener">
+          {%- render 'icon-vimeo' -%}
+          <span class="visually-hidden">{{ 'general.social.alt_text.share_on_vimeo' | t }}</span>
+        </a>
+      </li>
+    {%- endif -%}
+  </ul>
+{%- endif -%}

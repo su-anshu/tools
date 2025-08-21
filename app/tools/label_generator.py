@@ -36,6 +36,69 @@ def is_empty_value(value):
     str_value = str(value).strip().lower()
     return str_value in ["", "nan", "none", "null", "n/a"]
 
+
+def parse_expiry_value(expiry_value, reference_date=None):
+    """Parse expiry value from the master sheet into a relativedelta or absolute date.
+
+    Supported formats:
+    - integer or numeric string: interpreted as months
+    - strings containing 'month', 'months', 'mo', 'm' -> extract months
+    - strings containing 'day', 'days', 'd' -> extract days
+    - ISO-like date strings (YYYY-MM-DD, DD/MM/YYYY, etc.) -> parsed to datetime
+
+    Returns:
+    - ('rel', relativedelta) when an offset should be applied
+    - ('date', datetime) when expiry is an absolute date
+    - (None, None) when parsing failed
+    """
+    from dateutil.parser import parse as dateparse
+    if reference_date is None:
+        reference_date = datetime.today()
+
+    if expiry_value is None:
+        return None, None
+
+    try:
+        # Normalize
+        if isinstance(expiry_value, (int, float)) and not isinstance(expiry_value, bool):
+            # Treat numeric as months
+            months = int(expiry_value)
+            return 'rel', relativedelta(months=months)
+
+        s = str(expiry_value).strip()
+        if s == "":
+            return None, None
+
+        # Pure number in string -> months
+        if re.fullmatch(r"\d+", s):
+            return 'rel', relativedelta(months=int(s))
+
+        # Patterns like '2 months', '3 mo', '90 days'
+        m = re.search(r"(\d+)\s*(months|month|mos|mo|m)\b", s, flags=re.I)
+        if m:
+            return 'rel', relativedelta(months=int(m.group(1)))
+
+        d = re.search(r"(\d+)\s*(days|day|d)\b", s, flags=re.I)
+        if d:
+            return 'rel', relativedelta(days=int(d.group(1)))
+
+        # If string looks like a date, try parse
+        # dateutil.parse is forgiving and will accept many formats
+        try:
+            dt = dateparse(s, dayfirst=False, yearfirst=False)
+            # If parsed date is before reference_date, assume year-less string like '21 Aug' -> pick next occurrence
+            if dt.year == reference_date.year and dt < reference_date:
+                # try to bump year
+                dt = dt.replace(year=reference_date.year + 1)
+            return 'date', dt
+        except Exception:
+            pass
+
+    except Exception:
+        return None, None
+
+    return None, None
+
 @contextlib.contextmanager
 def safe_pdf_context(pdf_bytes):
     """Context manager for safe PDF handling"""
@@ -154,7 +217,6 @@ def generate_pdf(dataframe):
         c = canvas.Canvas(buffer, pagesize=(LABEL_WIDTH, LABEL_HEIGHT))
         today = datetime.today()
         mfg_date = today.strftime('%d %b %Y').upper()
-        use_by = (today + relativedelta(months=6)).strftime('%d %b %Y').upper()
         date_code = today.strftime('%d%m%y')
 
         for _, row in dataframe.iterrows():
@@ -193,6 +255,36 @@ def generate_pdf(dataframe):
 
             # Draw label content
             try:
+                # Compute per-product use_by based on Expiry column if available
+                expiry_candidates = [
+                    row.get('Expiry'),
+                    row.get('EXPIRY'),
+                    row.get('Shelf Life'),
+                    row.get('Shelf_Life'),
+                    row.get('ShelfLife'),
+                    row.get('Expiry Months'),
+                    row.get('ShelfLifeMonths'),
+                    row.get('L')  # fallback if user used column-letter accidentally
+                ]
+
+                parsed_kind = None
+                parsed_val = None
+                for candidate in expiry_candidates:
+                    if not is_empty_value(candidate):
+                        parsed_kind, parsed_val = parse_expiry_value(candidate, reference_date=today)
+                        if parsed_kind is not None:
+                            break
+
+                # Default to 6 months if nothing found or parse failed
+                if parsed_kind == 'date' and isinstance(parsed_val, datetime):
+                    use_by_dt = parsed_val
+                elif parsed_kind == 'rel' and parsed_val is not None:
+                    use_by_dt = today + parsed_val
+                else:
+                    use_by_dt = today + relativedelta(months=6)
+
+                use_by = use_by_dt.strftime('%d %b %Y').upper()
+
                 c.setFont("Helvetica-Bold", 6)
                 c.drawString(2 * mm, 22 * mm, f"Name: {name[:30]}")  # Truncate long names
                 c.drawString(2 * mm, 18 * mm, f"Net Weight: {weight} Kg")
@@ -883,10 +975,44 @@ def label_generator_tool():
                         st.markdown("#### 🧾 Combined MRP + Barcode Labels")
                         
                         # Create tabs for different methods
-                        tab1, tab2 = st.tabs(["📄 Direct Generation (Recommended)", "🗂️ PDF Method"])
+                        tab1, tab2 = st.tabs(["�️ PDF Method (Default)", "� Direct Generation"])
                         
                         with tab1:
-                            st.caption("✅ Amazon-compliant Code 128A barcodes generated directly")
+                            st.caption("✅ Uses existing barcode PDF file from sidebar")
+                            
+                            # Extract barcode
+                            barcode = extract_fnsku_page(fnsku_code, BARCODE_PDF_PATH)
+                            if barcode:
+                                col1, col2 = st.columns(2)  # Changed from 3 to 2 columns
+                                
+                                with col1:
+                                    st.markdown("**Barcode Only**")
+                                    st.download_button(
+                                        "📦 Download", 
+                                        data=barcode, 
+                                        file_name=f"{fnsku_code}_barcode_pdf.pdf", 
+                                        mime="application/pdf",
+                                        use_container_width=True
+                                    )
+                                
+                                with col2:
+                                    st.markdown("**Horizontal (96×25mm)**")
+                                    combined = generate_combined_label_pdf(filtered_df, fnsku_code, BARCODE_PDF_PATH)
+                                    if combined:
+                                        st.download_button(
+                                            "🧾 Download", 
+                                            data=combined, 
+                                            file_name=f"{safe_name}_Horizontal_PDF.pdf", 
+                                            mime="application/pdf",
+                                            use_container_width=True
+                                        )
+                                    else:
+                                        st.error("Generation failed")
+                            else:
+                                st.warning(f"⚠️ FNSKU {fnsku_code} not found in barcode PDF")
+                        
+                        with tab2:
+                            st.caption("Amazon-compliant Code 128A barcodes generated directly")
                             
                             col1, col2 = st.columns(2)  # Changed from 3 to 2 columns
                             
@@ -919,40 +1045,6 @@ def label_generator_tool():
                                     )
                                 else:
                                     st.error("Generation failed")
-                        
-                        with tab2:
-                            st.caption("Uses existing barcode PDF file from sidebar")
-                            
-                            # Extract barcode
-                            barcode = extract_fnsku_page(fnsku_code, BARCODE_PDF_PATH)
-                            if barcode:
-                                col1, col2 = st.columns(2)  # Changed from 3 to 2 columns
-                                
-                                with col1:
-                                    st.markdown("**Barcode Only**")
-                                    st.download_button(
-                                        "📦 Download", 
-                                        data=barcode, 
-                                        file_name=f"{fnsku_code}_barcode_pdf.pdf", 
-                                        mime="application/pdf",
-                                        use_container_width=True
-                                    )
-                                
-                                with col2:
-                                    st.markdown("**Horizontal (96×25mm)**")
-                                    combined = generate_combined_label_pdf(filtered_df, fnsku_code, BARCODE_PDF_PATH)
-                                    if combined:
-                                        st.download_button(
-                                            "🧾 Download", 
-                                            data=combined, 
-                                            file_name=f"{safe_name}_Horizontal_PDF.pdf", 
-                                            mime="application/pdf",
-                                            use_container_width=True
-                                        )
-                                    else:
-                                        st.error("Generation failed")
-                            else:
-                                st.warning(f"⚠️ FNSKU {fnsku_code} not found in barcode PDF")
                         
                         st.markdown("---")
                     else:
@@ -1009,36 +1101,10 @@ def label_generator_tool():
                                     st.caption("No barcode available")
                             
                             # Generation tabs
-                            tab1, tab2 = st.tabs(["📄 Direct Generation (Recommended)", "🗂️ PDF Method"])
+                            tab1, tab2 = st.tabs(["�️ PDF Method (Default)", "� Direct Generation"])
                             
                             with tab1:
-                                st.caption("✅ Amazon-compliant Code 128A barcodes generated directly")
-                                
-                                # Generate button centered
-                                if st.button("🧾 Generate Triple Label", key="direct_triple", use_container_width=True):
-                                    with st.spinner("🔄 Generating (Direct)..."):
-                                        triple_pdf = generate_triple_label_combined(
-                                            filtered_df, 
-                                            nutrition_row, 
-                                            selected_product,
-                                            method="direct"
-                                        )
-                                        
-                                        if triple_pdf:
-                                            st.success("✅ Ready!")
-                                            st.download_button(
-                                                "📥 Download Triple Label", 
-                                                data=triple_pdf, 
-                                                file_name=f"{safe_name}_{selected_weight}_Triple_Direct.pdf", 
-                                                mime="application/pdf",
-                                                use_container_width=True,
-                                                key="download_direct_triple"
-                                            )
-                                        else:
-                                            st.error("❌ Generation failed")
-                            
-                            with tab2:
-                                st.caption("Uses existing barcode PDF file from sidebar")
+                                st.caption("✅ Uses existing barcode PDF file from sidebar")
                                 
                                 if os.path.exists(BARCODE_PDF_PATH):
                                     col1, col2 = st.columns([2, 1])
@@ -1073,6 +1139,32 @@ def label_generator_tool():
                                 else:
                                     st.warning("⚠️ Barcode PDF not available")
                                     st.caption("Please upload barcode PDF via sidebar to use this method")
+                            
+                            with tab2:
+                                st.caption("Amazon-compliant Code 128A barcodes generated directly")
+                                
+                                # Generate button centered
+                                if st.button("🧾 Generate Triple Label", key="direct_triple", use_container_width=True):
+                                    with st.spinner("🔄 Generating (Direct)..."):
+                                        triple_pdf = generate_triple_label_combined(
+                                            filtered_df, 
+                                            nutrition_row, 
+                                            selected_product,
+                                            method="direct"
+                                        )
+                                        
+                                        if triple_pdf:
+                                            st.success("✅ Ready!")
+                                            st.download_button(
+                                                "📥 Download Triple Label", 
+                                                data=triple_pdf, 
+                                                file_name=f"{safe_name}_{selected_weight}_Triple_Direct.pdf", 
+                                                mime="application/pdf",
+                                                use_container_width=True,
+                                                key="download_direct_triple"
+                                            )
+                                        else:
+                                            st.error("❌ Generation failed")
                     else:
                         st.error("❌ Could not load nutrition data")
                         st.caption("Check internet connection")

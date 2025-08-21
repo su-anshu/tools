@@ -607,7 +607,7 @@ def packing_plan_tool():
                     with col1:
                         label_method = st.radio(
                             "🔧 Choose Generation Method:",
-                            ["PDF-Based (Current)", "Direct Generation (NEW)"],
+                            ["PDF-Based (Default)", "Direct Generation"],
                             index=0,
                             help="PDF-Based: Uses existing barcode PDF | Direct: Generates barcodes automatically"
                         )
@@ -622,9 +622,9 @@ def packing_plan_tool():
                     
                     # Show method info
                     if "Direct" in label_method:
-                        st.info("🆕 **Direct Generation**: Generates Code 128 barcodes automatically from FNSKU codes - no PDF file needed!")
+                        st.info("🔄 **Direct Generation**: Generates Code 128 barcodes automatically from FNSKU codes - no PDF file needed!")
                     else:
-                        st.info("🗂️ **PDF-Based**: Uses existing barcode PDF file uploaded via sidebar.")
+                        st.info("✅ **PDF-Based (Default)**: Uses existing barcode PDF file uploaded via sidebar.")
                     
                     try:
                         combined_pdf = fitz.open()

@@ -1,0 +1,8 @@
+{% comment %}
+  The content for the index template is generated in the section below.
+  This template loops through each section added to the "Home page" template in the theme editor.
+{% endcomment %}
+
+{%- for section in template.sections -%}
+  {%- render section -%}
+{%- endfor -%}
