@@ -1,0 +1,351 @@
+/* Mithila Tools Dashboard - Minimalist CSS Theme */
+
+/* Minimal Color Scheme - Neutral Grays with Minimal Green Accent */
+:root {
+  --primary-green: #4CAF50;
+  --bg-white: #FFFFFF;
+  --bg-light: #F5F5F5;
+  --text-dark: #212121;
+  --text-medium: #757575;
+  --border-color: #E0E0E0;
+}
+
+/* Global Styles - Minimal */
+.main .block-container {
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+  max-width: 1400px;
+}
+
+/* Custom Card Container */
+.custom-card {
+  background: var(--bg-white);
+  border-radius: var(--border-radius-lg);
+  padding: var(--spacing-md);
+  box-shadow: var(--card-shadow);
+  margin: var(--spacing-sm) 0;
+  border: 1px solid var(--border-color);
+}
+
+.custom-card:hover {
+  box-shadow: var(--card-shadow-hover);
+  transition: box-shadow 0.3s ease;
+}
+
+/* Minimal Buttons - Simple and Clean */
+.stDownloadButton > button {
+  background: white;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 0.35rem 0.75rem;
+  color: var(--text-dark);
+  font-weight: 500;
+  font-size: 0.75rem;
+  transition: border-color 0.2s ease;
+  box-shadow: none;
+}
+
+.stDownloadButton > button:hover {
+  border-color: var(--primary-green);
+  border-width: 2px;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Primary Action Buttons - Minimal */
+.stButton > button[kind="primary"] {
+  background: white;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-dark);
+  font-weight: 500;
+  font-size: 0.75rem;
+  padding: 0.35rem 0.75rem;
+}
+
+.stButton > button[kind="primary"]:hover {
+  border-color: var(--primary-green);
+  border-width: 2px;
+}
+
+.stButton > button[kind="secondary"] {
+  font-size: 0.75rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border-color);
+}
+
+/* Minimal Tab Styling */
+.stTabs [data-baseweb="tab-list"] {
+  gap: 0.5rem;
+}
+
+.stTabs [data-baseweb="tab"] {
+  font-size: 0.875rem;
+  padding: 0.5rem 1rem;
+  color: var(--text-medium);
+}
+
+.stTabs [aria-selected="true"] {
+  background-color: var(--bg-light);
+  color: var(--text-dark);
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* Status Badges */
+.status-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 20px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin: 0.25rem;
+}
+
+.status-ready {
+  background-color: var(--success-green);
+  color: white;
+}
+
+.status-warning {
+  background-color: var(--warning-orange);
+  color: white;
+}
+
+.status-error {
+  background-color: var(--error-red);
+  color: white;
+}
+
+.status-info {
+  background-color: var(--info-blue);
+  color: white;
+}
+
+/* Section Headers */
+.section-header {
+  border-left: 4px solid var(--primary-green);
+  padding-left: var(--spacing-sm);
+  margin: var(--spacing-lg) 0 var(--spacing-md) 0;
+  font-weight: 600;
+  color: var(--text-dark);
+}
+
+/* File Upload Area */
+.upload-area {
+  border: 2px dashed var(--border-color);
+  border-radius: var(--border-radius-lg);
+  padding: var(--spacing-lg);
+  text-align: center;
+  background: var(--bg-light);
+  transition: all 0.3s ease;
+}
+
+.upload-area:hover {
+  border-color: var(--primary-green);
+  background: rgba(76, 175, 80, 0.05);
+}
+
+/* Info Boxes */
+.info-box {
+  background: rgba(100, 181, 246, 0.1);
+  border-left: 4px solid var(--info-blue);
+  padding: var(--spacing-sm);
+  border-radius: var(--border-radius);
+  margin: var(--spacing-sm) 0;
+}
+
+.success-box {
+  background: rgba(129, 199, 132, 0.1);
+  border-left: 4px solid var(--success-green);
+}
+
+.warning-box {
+  background: rgba(255, 183, 77, 0.1);
+  border-left: 4px solid var(--warning-orange);
+}
+
+.error-box {
+  background: rgba(229, 115, 115, 0.1);
+  border-left: 4px solid var(--error-red);
+}
+
+/* Tool Cards */
+.tool-card {
+  background: white;
+  border-radius: var(--border-radius-lg);
+  padding: var(--spacing-md);
+  box-shadow: var(--card-shadow);
+  border: 1px solid var(--border-color);
+  transition: all 0.3s ease;
+  cursor: pointer;
+  text-align: center;
+}
+
+.tool-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--card-shadow-hover);
+  border-color: var(--primary-green);
+}
+
+.tool-card-icon {
+  font-size: 3rem;
+  margin-bottom: var(--spacing-sm);
+}
+
+.tool-card-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-dark);
+  margin-bottom: var(--spacing-xs);
+}
+
+.tool-card-description {
+  color: var(--text-medium);
+  font-size: 0.875rem;
+}
+
+/* Sidebar Enhancements */
+.css-1d391kg {
+  background: linear-gradient(180deg, #f8f9fa 0%, #ffffff 100%);
+}
+
+/* Progress Indicators */
+.progress-container {
+  background: var(--bg-light);
+  border-radius: var(--border-radius);
+  padding: var(--spacing-sm);
+  margin: var(--spacing-sm) 0;
+}
+
+/* Dataframe Styling */
+.dataframe {
+  border-radius: var(--border-radius);
+  overflow: hidden;
+}
+
+/* Divider */
+.section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-color), transparent);
+  margin: var(--spacing-lg) 0;
+}
+
+/* Welcome Header */
+.welcome-header {
+  background: linear-gradient(135deg, var(--primary-green) 0%, var(--secondary-green) 100%);
+  color: white;
+  padding: var(--spacing-lg);
+  border-radius: var(--border-radius-lg);
+  margin-bottom: var(--spacing-lg);
+  box-shadow: var(--card-shadow);
+}
+
+.welcome-header h1 {
+  color: white;
+  margin-bottom: var(--spacing-xs);
+}
+
+.welcome-header p {
+  color: rgba(255, 255, 255, 0.9);
+  margin: 0;
+}
+
+/* Connection Badge */
+.connection-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.connection-badge.connected {
+  background: rgba(129, 199, 132, 0.2);
+  color: var(--success-green);
+  border: 1px solid var(--success-green);
+}
+
+.connection-badge.disconnected {
+  background: rgba(255, 183, 77, 0.2);
+  color: var(--warning-orange);
+  border: 1px solid var(--warning-orange);
+}
+
+/* Empty State */
+.empty-state {
+  text-align: center;
+  padding: var(--spacing-lg);
+  color: var(--text-medium);
+}
+
+.empty-state-icon {
+  font-size: 4rem;
+  margin-bottom: var(--spacing-sm);
+  opacity: 0.5;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+  .main .block-container {
+    padding: 1rem;
+  }
+  
+  .custom-card {
+    padding: var(--spacing-sm);
+  }
+  
+  .tool-card {
+    margin-bottom: var(--spacing-sm);
+  }
+}
+
+/* Animation for Success */
+@keyframes successPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+.success-animation {
+  animation: successPulse 0.5s ease-in-out;
+}
+
+/* Loading Spinner Enhancement */
+.stSpinner > div {
+  border-color: var(--primary-green) transparent transparent transparent;
+}
+
+/* Collapsible Sidebar Menu - Simple Animations */
+/* Note: Using conditional rendering, so CSS is minimal for smooth appearance */
+
+/* Smooth button appearance animation */
+@keyframes fadeInSlide {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Apply animation to sidebar buttons (will apply to submenu buttons when they appear) */
+section[data-testid="stSidebar"] [data-testid="stButton"] {
+  animation: fadeInSlide 0.3s ease-out;
+}
+
+/* Smooth transition for button hover */
+section[data-testid="stSidebar"] button {
+  transition: all 0.2s ease-in-out;
+}
+
+section[data-testid="stSidebar"] button:hover {
+  transform: translateX(2px);
+}
+

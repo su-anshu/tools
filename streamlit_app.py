@@ -37,18 +37,81 @@ except Exception as e:
 # Configure Streamlit page
 st.set_page_config(page_title="📦 Mithila Tools Dashboard", layout="wide")
 
+# Inject custom CSS for smooth animations
+try:
+    from app.utils.ui_components import inject_custom_css
+    inject_custom_css()
+except Exception as e:
+    logger.warning(f"Could not load custom CSS: {e}")
+
 # Main dashboard
 st.sidebar.title("🧰 Mithila Dashboard")
-tool = st.sidebar.selectbox("Choose a tool", [
-    "📦 Packing Plan Generator",
-    "🔖 Manual Packing Plan Generator", 
-    "🔖 Label Generator",
-    "📥 Easy Ship Report Generator"
-])
+
+# Initialize session state for collapsible menu
+if 'amazon_easy_ship_expanded' not in st.session_state:
+    st.session_state.amazon_easy_ship_expanded = True  # Start expanded
+if 'selected_tool' not in st.session_state:
+    st.session_state.selected_tool = "Amazon Easy Ship > Packing Plan"
+
+# Amazon Easy Ship parent button with chevron
+chevron_icon = "▼" if st.session_state.amazon_easy_ship_expanded else "▶"
+is_amazon_selected = st.session_state.selected_tool.startswith("Amazon Easy Ship")
+parent_button_type = "primary" if is_amazon_selected else "secondary"
+
+# Parent button
+if st.sidebar.button(f"📦 Amazon Easy Ship {chevron_icon}", use_container_width=True, type=parent_button_type, key="amazon_easy_ship_parent"):
+    st.session_state.amazon_easy_ship_expanded = not st.session_state.amazon_easy_ship_expanded
+    st.rerun()
+
+# Sub-items (conditionally rendered - only when expanded)
+if st.session_state.amazon_easy_ship_expanded:
+    is_packing_selected = st.session_state.selected_tool == "Amazon Easy Ship > Packing Plan"
+    is_report_selected = st.session_state.selected_tool == "Amazon Easy Ship > Easy Ship Report"
+    
+    if st.sidebar.button("  → Packing Plan", use_container_width=True, type="primary" if is_packing_selected else "secondary", key="amazon_packing_plan"):
+        st.session_state.selected_tool = "Amazon Easy Ship > Packing Plan"
+        st.rerun()
+    
+    if st.sidebar.button("  → Easy Ship Report", use_container_width=True, type="primary" if is_report_selected else "secondary", key="amazon_easy_ship_report"):
+        st.session_state.selected_tool = "Amazon Easy Ship > Easy Ship Report"
+        st.rerun()
+
+# Spacing
+st.sidebar.markdown("---")
+
+# Other tools
+is_manual_selected = st.session_state.selected_tool == "Manual Plan"
+if st.sidebar.button("🔖 Manual Plan", use_container_width=True, type="primary" if is_manual_selected else "secondary", key="manual_plan"):
+    st.session_state.selected_tool = "Manual Plan"
+    st.rerun()
+
+is_label_selected = st.session_state.selected_tool == "Label Generator"
+if st.sidebar.button("🏷️ Label Generator", use_container_width=True, type="primary" if is_label_selected else "secondary", key="label_generator"):
+    st.session_state.selected_tool = "Label Generator"
+    st.rerun()
+
+is_product_label_selected = st.session_state.selected_tool == "Product Label Generator"
+if st.sidebar.button("📋 Product Label Generator", use_container_width=True, type="primary" if is_product_label_selected else "secondary", key="product_label_generator"):
+    st.session_state.selected_tool = "Product Label Generator"
+    st.rerun()
+
+is_flipkart_selected = st.session_state.selected_tool == "🛒 Flipkart Packing Plan"
+if st.sidebar.button("🛒 Flipkart Packing Plan", use_container_width=True, type="primary" if is_flipkart_selected else "secondary", key="flipkart_packing_plan"):
+    st.session_state.selected_tool = "🛒 Flipkart Packing Plan"
+    st.rerun()
+
+# Get the selected tool for loading
+tool = st.session_state.selected_tool
 
 # Tool loading with error handling
 try:
-    if tool == "📦 Packing Plan Generator":
+    # Handle nested tool paths (e.g., "Amazon Easy Ship > Packing Plan")
+    actual_tool = tool
+    if " > " in tool:
+        actual_tool = tool.split(" > ")[-1]
+    
+    # Map tool names to functions
+    if actual_tool == "Packing Plan" or tool == "Amazon Easy Ship > Packing Plan":
         try:
             from app.tools.packing_plan import packing_plan_tool
             packing_plan_tool()
@@ -63,7 +126,22 @@ try:
             st.info("💡 **Solution**: Check your data files and try refreshing the page")
             logger.error(f"Runtime error in packing_plan_tool: {str(e)}")
 
-    elif tool == "🔖 Label Generator":
+    elif actual_tool == "Easy Ship Report" or tool == "Amazon Easy Ship > Easy Ship Report":
+        try:
+            from app.tools.easy_ship_report import easy_ship_report
+            easy_ship_report()
+        except ImportError as e:
+            st.error(f"❌ **Module Error**: Could not load Easy Ship Report Generator")
+            st.error(f"**Details**: {str(e)}")
+            st.info("💡 **Solution**: Ensure all dependencies are installed: `pip install -r requirements.txt`")
+            logger.error(f"Import error in easy_ship_report: {str(e)}")
+        except Exception as e:
+            st.error(f"❌ **Runtime Error**: Error running Easy Ship Report Generator")
+            st.error(f"**Details**: {str(e)}")
+            st.info("💡 **Solution**: Check your shipping data format and try again")
+            logger.error(f"Runtime error in easy_ship_report: {str(e)}")
+
+    elif tool == "Label Generator":
         try:
             from app.tools.label_generator import label_generator_tool
             label_generator_tool()
@@ -78,7 +156,7 @@ try:
             st.info("💡 **Solution**: Check your data files and font directory")
             logger.error(f"Runtime error in label_generator_tool: {str(e)}")
 
-    elif tool == "🔖 Manual Packing Plan Generator":
+    elif tool == "Manual Plan":
         try:
             from app.tools.manual_packing_plan import manual_packing_plan
             manual_packing_plan()
@@ -93,20 +171,35 @@ try:
             st.info("💡 **Solution**: Check your Excel file format and data directory permissions")
             logger.error(f"Runtime error in manual_packing_plan: {str(e)}")
 
-    elif tool == "📥 Easy Ship Report Generator":
+    elif tool == "Product Label Generator":
         try:
-            from app.tools.easy_ship_report import easy_ship_report
-            easy_ship_report()
+            from app.tools.product_label_generator import product_label_generator_tool
+            product_label_generator_tool()
         except ImportError as e:
-            st.error(f"❌ **Module Error**: Could not load Easy Ship Report Generator")
+            st.error(f"❌ **Module Error**: Could not load Product Label Generator")
             st.error(f"**Details**: {str(e)}")
             st.info("💡 **Solution**: Ensure all dependencies are installed: `pip install -r requirements.txt`")
-            logger.error(f"Import error in easy_ship_report: {str(e)}")
+            logger.error(f"Import error in product_label_generator_tool: {str(e)}")
         except Exception as e:
-            st.error(f"❌ **Runtime Error**: Error running Easy Ship Report Generator")
+            st.error(f"❌ **Runtime Error**: Error running Product Label Generator")
             st.error(f"**Details**: {str(e)}")
-            st.info("💡 **Solution**: Check your shipping data format and try again")
-            logger.error(f"Runtime error in easy_ship_report: {str(e)}")
+            st.info("💡 **Solution**: Check your data files and try refreshing the page")
+            logger.error(f"Runtime error in product_label_generator_tool: {str(e)}")
+
+    elif tool == "🛒 Flipkart Packing Plan":
+        try:
+            from app.tools.flipkart_packing_plan import flipkart_packing_plan_tool
+            flipkart_packing_plan_tool()
+        except ImportError as e:
+            st.error(f"❌ **Module Error**: Could not load Flipkart Packing Plan Generator")
+            st.error(f"**Details**: {str(e)}")
+            st.info("💡 **Solution**: Ensure all dependencies are installed: `pip install -r requirements.txt`")
+            logger.error(f"Import error in flipkart_packing_plan_tool: {str(e)}")
+        except Exception as e:
+            st.error(f"❌ **Runtime Error**: Error running Flipkart Packing Plan Generator")
+            st.error(f"**Details**: {str(e)}")
+            st.info("💡 **Solution**: Check your data files and try refreshing the page")
+            logger.error(f"Runtime error in flipkart_packing_plan_tool: {str(e)}")
 
 except Exception as e:
     st.error(f"Unexpected error in main application: {str(e)}")

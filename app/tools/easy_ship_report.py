@@ -48,7 +48,15 @@ def detect_multi_item_orders(df):
         return [], pd.DataFrame()
 
 def easy_ship_report():
-    st.title("📥 Easy Ship Order Report Generator")
+    # Inject custom CSS
+    try:
+        from app.utils.ui_components import inject_custom_css
+        inject_custom_css()
+    except Exception:
+        pass
+    
+    # Minimal header
+    st.markdown("### Easy Ship Order Report Generator")
     admin_logged_in, _, _, _ = sidebar_controls()
 
     # Load master data from Google Sheets or Excel backup
@@ -66,12 +74,12 @@ def easy_ship_report():
                 asin_map = mrp_df[['ASIN', 'clean_product_name']].dropna()
                 logger.info(f"Loaded {len(asin_map)} ASIN mappings from master data")
             else:
-                st.warning("⚠️ Master data missing required columns (Name, Net Weight)")
+                st.warning("Master data missing required columns (Name, Net Weight)")
         except Exception as e:
-            st.warning(f"⚠️ Could not process master data: {str(e)}")
+            st.warning(f"Could not process master data: {str(e)}")
             logger.error(f"Error processing master data: {str(e)}")
     else:
-        st.warning("⚠️ Master data not available. Product names may not be cleaned.")
+        st.warning("Master data not available. Product names may not be cleaned.")
 
     # Easy Ship file uploader
     uploaded_file = st.file_uploader("Upload your Amazon Easy Ship Excel file", type="xlsx")
@@ -176,10 +184,10 @@ def easy_ship_report():
                 # Detect multi-item orders
                 multi_item_orders, order_stats = detect_multi_item_orders(df)
 
-                st.success(f"✅ {len(df)} orders processed successfully.")
+                st.caption(f"{len(df)} orders processed successfully")
                 
                 # Show order analysis
-                st.subheader("📊 Order Analysis")
+                st.markdown("**Order Analysis**")
                 col1, col2, col3 = st.columns(3)
                 
                 total_orders = len(df['tracking-id'].unique())
@@ -196,10 +204,10 @@ def easy_ship_report():
 
                 # Show warning if multi-item orders exist
                 if multi_item_count > 0:
-                    st.warning(f"⚠️ {multi_item_count} orders contain multiple items - require complete packing!")
+                    st.warning(f"{multi_item_count} orders contain multiple items - require complete packing")
                     
                     # Show multi-item order details
-                    with st.expander("🔍 View Multi-Item Order Details"):
+                    with st.expander("View Multi-Item Order Details"):
                         for tracking_id in multi_item_orders[:5]:  # Show first 5
                             order_items = df[df['tracking-id'] == tracking_id]
                             items_list = order_items['product-name'].tolist()
@@ -207,21 +215,21 @@ def easy_ship_report():
                         if len(multi_item_orders) > 5:
                             st.write(f"... and {len(multi_item_orders) - 5} more multi-item orders")
                 else:
-                    st.success("✅ All orders are single-item orders - no risk of incomplete packing!")
+                    st.caption("All orders are single-item orders - no risk of incomplete packing")
 
                 # Show preview of data
-                with st.expander("📋 Preview Processed Data"):
+                with st.expander("Preview Processed Data"):
                     display_df = df.drop(columns=['highlight'], errors='ignore')
                     st.dataframe(display_df)
 
                 # Grouping style selector
-                st.subheader("📄 Report Generation")
+                st.markdown("**Report Generation**")
                 grouping_style = st.radio(
                     "Select Report Grouping Style:",
                     [
-                        "📦 By Product Only (Current Method)",
-                        "🔥 Multi-Item First, Then By Product (Recommended)", 
-                        "⚠️ By Product with Multi-Item Warnings"
+                        "By Product Only (Current Method)",
+                        "Multi-Item First, Then By Product (Recommended)", 
+                        "By Product with Multi-Item Warnings"
                     ],
                     index=1 if multi_item_count > 0 else 0,  # Default to recommended if multi-item orders exist
                     help="Choose how to organize the PDF report for your packers"
@@ -281,29 +289,31 @@ def easy_ship_report():
                         today_str = date.today().strftime("%Y-%m-%d")
                         page_size = A4 if orientation == "Portrait" else landscape(A4)
 
+                        # Calculate statistics first (used in title, doc title, and stats)
+                        total_orders = len(dataframe['tracking-id'].unique())
+                        multi_count = len(multi_item_orders)
+                        single_count = total_orders - multi_count
+
                         doc = SimpleDocTemplate(
                             buffer, 
                             pagesize=page_size, 
-                            title=f"Easy Ship Report - {len(dataframe)} Orders - {today_str}"
+                            title=f"Easy Ship Report - {total_orders} Orders - {today_str}"
                         )
                         elements = []
 
                         # Title and summary
-                        title = f"Easy Ship Report - {len(dataframe)} Orders - {today_str}"
+                        title = f"Easy Ship Report - {total_orders} Orders - {today_str}"
                         elements.append(Paragraph(title, title_style))
                         elements.append(Spacer(1, 12))
                         
                         # Statistics summary
-                        total_orders = len(dataframe['tracking-id'].unique())
-                        multi_count = len(multi_item_orders)
-                        single_count = total_orders - multi_count
                         
                         stats_text = f"📊 Total Orders: {total_orders} | Multi-Item Orders: {multi_count} | Single-Item Orders: {single_count}"
                         elements.append(Paragraph(stats_text, styles['Normal']))
                         elements.append(Spacer(1, 12))
 
                         # Generate content based on grouping style
-                        if grouping_style == "🔥 Multi-Item First, Then By Product (Recommended)":
+                        if grouping_style == "Multi-Item First, Then By Product (Recommended)":
                             # Section 1: Multi-item orders
                             if len(multi_item_orders) > 0:
                                 elements.append(Paragraph("🔥 SECTION 1: MULTI-ITEM ORDERS (Pack Complete Orders)", section_style))
@@ -313,7 +323,7 @@ def easy_ship_report():
                                 
                                 # Process each multi-item order
                                 for tracking_id in multi_item_orders:
-                                    order_items = df[df['tracking-id'] == tracking_id]
+                                    order_items = dataframe[dataframe['tracking-id'] == tracking_id]
                                     
                                     # Order header
                                     elements.append(Paragraph(f"📋 Order #{tracking_id} - COMPLETE ORDER", order_header_style))
@@ -392,7 +402,7 @@ def easy_ship_report():
                             else:
                                 elements.append(Paragraph("No single-item orders found.", styles['Normal']))
 
-                        elif grouping_style == "⚠️ By Product with Multi-Item Warnings":
+                        elif grouping_style == "By Product with Multi-Item Warnings":
                             # Current grouping with warnings
                             grouped = dataframe.groupby('product-name')
                             for product_name, group in grouped:
@@ -428,8 +438,8 @@ def easy_ship_report():
                                 ])
                                 
                                 # Highlight multi-item rows
-                                for i, row in enumerate(group.itertuples(), start=1):
-                                    if row._1 in multi_item_orders:  # tracking-id is first column after index
+                                for i, (idx, row) in enumerate(group.iterrows(), start=1):
+                                    if row['tracking-id'] in multi_item_orders:
                                         table_style.add('BACKGROUND', (0, i), (-1, i), colors.lightyellow)
                                         table_style.add('TEXTCOLOR', (3, i), (3, i), colors.red)
                                 
@@ -483,7 +493,7 @@ def easy_ship_report():
                         return None
 
                 # PDF generation button
-                if st.button("📄 Generate PDF Report"):
+                if st.button("Generate PDF Report", use_container_width=True):
                     with st.spinner("Generating enhanced report..."):
                         pdf_buffer = generate_grouped_pdf(df, orientation, grouping_style, multi_item_orders)
                         
@@ -499,17 +509,18 @@ def easy_ship_report():
                             filename = f"EasyShip_{style_suffix}_{len(df)}_Orders_{date.today().strftime('%Y%m%d')}.pdf"
                             
                             st.download_button(
-                                label="📥 Download Enhanced PDF",
+                                label="Download Enhanced PDF",
                                 data=pdf_buffer,
                                 file_name=filename,
-                                mime="application/pdf"
+                                mime="application/pdf",
+                                use_container_width=True
                             )
-                            st.success("✅ PDF generated successfully!")
+                            st.caption("PDF generated successfully")
                         else:
-                            st.error("❌ Failed to generate PDF. Please try again.")
+                            st.error("Failed to generate PDF. Please try again.")
 
                 # Excel export option
-                if st.button("📊 Generate Excel Export"):
+                if st.button("Generate Excel Export", use_container_width=True):
                     try:
                         excel_buffer = BytesIO()
                         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
@@ -544,10 +555,11 @@ def easy_ship_report():
                         excel_buffer.seek(0)
                         filename = f"Easy_Ship_Data_{len(df)}_Orders_{date.today().strftime('%Y%m%d')}.xlsx"
                         st.download_button(
-                            label="📥 Download Excel",
+                            label="Download Excel",
                             data=excel_buffer,
                             file_name=filename,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
                         )
                     except Exception as e:
                         st.error(f"Error generating Excel: {str(e)}")

@@ -28,4 +28,7 @@ qrcode[pil]
 # Font handling
 fonttools
 
+# UI Styling (optional - will fallback to minimal CSS if not available)
+streamlit-tailwind
+
 

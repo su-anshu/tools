@@ -74,17 +74,41 @@ def validate_file_upload(uploaded_file, expected_type, max_size_mb=50):
 
 def sidebar_controls():
     """Enhanced sidebar with Google Sheets integration"""
-    st.sidebar.title("🧰 Sidebar Controls")
-    admin_logged_in = False
-    password = st.sidebar.text_input("Admin Password", type="password")
+    # Initialize session state for admin authentication
+    if 'admin_authenticated' not in st.session_state:
+        st.session_state.admin_authenticated = False
     
-    if password == ADMIN_PASSWORD:
-        st.sidebar.success("✅ Admin logged in")
-        admin_logged_in = True
-    else:
-        st.sidebar.info("Only admin can configure data sources.")
+    st.sidebar.markdown("### ⚙️ Configuration")
+    st.sidebar.markdown("---")
+    
+    # Check if already authenticated, otherwise show password input
+    if not st.session_state.admin_authenticated:
+        password = st.sidebar.text_input(
+            "🔐 Admin Password", 
+            type="password", 
+            help="Enter admin password to configure data sources",
+            key="admin_password_input"
+        )
+        
+        if password == ADMIN_PASSWORD:
+            st.sidebar.success("✅ Admin logged in")
+            st.session_state.admin_authenticated = True
+            st.rerun()
+        else:
+            if password:
+                st.sidebar.warning("⚠️ Incorrect password")
+            st.sidebar.caption("Only admin can configure data sources.")
+    
+    admin_logged_in = st.session_state.admin_authenticated
+    
+    # Show logout button if authenticated
+    if admin_logged_in:
+        if st.sidebar.button("🚪 Logout", key="admin_logout_button"):
+            st.session_state.admin_authenticated = False
+            st.rerun()
 
     if admin_logged_in:
+        st.sidebar.markdown("---")
         # Google Sheets Configuration Section
         st.sidebar.markdown("### 📊 Google Sheets Configuration")
         
@@ -106,10 +130,11 @@ def sidebar_controls():
         master_sheet_url = st.sidebar.text_input(
             "Master Sheet CSV URL",
             value=current_master_url,
-            help="CSV export URL from Google Sheets"
+            help="CSV export URL from Google Sheets",
+            key="master_sheet_url_input"
         )
         
-        if st.sidebar.button("📥 Test & Save Master Sheet"):
+        if st.sidebar.button("📥 Test & Save Master Sheet", key="test_save_master_button"):
             with st.sidebar.spinner("Testing connection..."):
                 df, error = load_from_google_sheet(master_sheet_url)
                 if error:
@@ -128,10 +153,11 @@ def sidebar_controls():
         manual_sheet_url = st.sidebar.text_input(
             "Manual Plan Sheet CSV URL (Optional)",
             placeholder="https://docs.google.com/.../export?format=csv&gid=0",
-            help="Leave empty to use file uploads for manual plans"
+            help="Leave empty to use file uploads for manual plans",
+            key="manual_sheet_url_input"
         )
         
-        if manual_sheet_url and st.sidebar.button("📥 Test & Save Manual Plan"):
+        if manual_sheet_url and st.sidebar.button("📥 Test & Save Manual Plan", key="test_save_manual_button"):
             with st.sidebar.spinner("Testing connection..."):
                 df, error = load_from_google_sheet(manual_sheet_url)
                 if error:
@@ -141,32 +167,29 @@ def sidebar_controls():
                         f.write(manual_sheet_url)
                     st.sidebar.success(f"✅ Connected! Found {len(df)} rows")
 
-        # Connection Status
-        st.sidebar.markdown("### 📊 Connection Status")
+        st.sidebar.markdown("---")
         
-        # Test master sheet connection
+        # Minimal Connection Status
+        st.sidebar.markdown("### Status")
+        
         if os.path.exists(master_url_file):
             try:
                 with open(master_url_file, 'r') as f:
                     url = f.read().strip()
                 df, error = load_from_google_sheet(url)
                 if error:
-                    st.sidebar.warning(f"⚠️ Master Sheet: Connection issue")
+                    st.sidebar.caption("⚠️ Connection issue")
                 else:
-                    st.sidebar.success(f"🔗 Master Sheet: Connected ({len(df)} products)")
+                    st.sidebar.caption(f"✓ {len(df)} products")
             except Exception:
-                st.sidebar.warning("⚠️ Master Sheet: Connection issue")
+                st.sidebar.caption("⚠️ Connection issue")
         else:
-            st.sidebar.warning("⚠️ Master Sheet: Using default URL")
-            
-        if os.path.exists(manual_url_file):
-            st.sidebar.success("🔗 Manual Plan Sheet: Connected")
-        else:
-            st.sidebar.info("ℹ️ Manual Plan: Using file uploads")
+            st.sidebar.caption("Using default URL")
 
         # Quick refresh button
-        if st.sidebar.button("🔄 Refresh Data Now"):
-            st.sidebar.info("✅ Data will refresh on next tool use")
+        if st.sidebar.button("Refresh Data", use_container_width=True, key="refresh_data_button"):
+            st.cache_data.clear()
+            st.rerun()
 
         # Backup file uploads section (collapsible)
         with st.sidebar.expander("📁 Backup File Uploads", expanded=False):
@@ -174,7 +197,7 @@ def sidebar_controls():
             
             # Master Excel Upload (backup)
             st.markdown("**📊 Backup Master Excel**")
-            excel_file = st.file_uploader("Upload temp_master.xlsx", type=["xlsx"], key="master_upload")
+            excel_file = st.file_uploader("Upload temp_master.xlsx", type=["xlsx"], key="sidebar_master_upload")
             if excel_file:
                 is_valid, message = validate_file_upload(excel_file, "xlsx")
                 if is_valid:
@@ -193,7 +216,7 @@ def sidebar_controls():
 
             # Barcode Upload
             st.markdown("**📤 Barcode PDF**")
-            barcode_file = st.file_uploader("Upload master_fnsku.pdf", type=["pdf"])
+            barcode_file = st.file_uploader("Upload master_fnsku.pdf", type=["pdf"], key="sidebar_barcode_upload")
             if barcode_file:
                 is_valid, message = validate_file_upload(barcode_file, "pdf")
                 if is_valid:
@@ -210,7 +233,7 @@ def sidebar_controls():
 
             # Manual Packing Plan Upload (backup)
             st.markdown("**📝 Backup Manual Packing Plan**")
-            manual_file = st.file_uploader("Upload latest_packing_plan.xlsx", type=["xlsx"], key="manual_upload")
+            manual_file = st.file_uploader("Upload latest_packing_plan.xlsx", type=["xlsx"], key="sidebar_manual_upload")
             if manual_file:
                 is_valid, message = validate_file_upload(manual_file, "xlsx")
                 if is_valid:

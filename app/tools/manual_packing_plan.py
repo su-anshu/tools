@@ -20,7 +20,15 @@ def is_empty_value(value):
     return str_value in ["", "nan", "none", "null", "n/a"]
 
 def manual_packing_plan():
-    st.title("🔖 Manual Packing Plan Generator")
+    # Inject custom CSS
+    try:
+        from app.utils.ui_components import inject_custom_css
+        inject_custom_css()
+    except Exception:
+        pass
+    
+    # Minimal header
+    st.markdown("### Manual Packing Plan Generator")
     sidebar_controls()
 
     def process_uploaded_file(path):
@@ -247,8 +255,8 @@ def manual_packing_plan():
 
     # Main logic
     if not os.path.exists(MANUAL_PLAN_FILE):
-        st.error("❌ No manual packing plan uploaded via sidebar.")
-        st.info("Please upload the 'latest_packing_plan.xlsx' file using the sidebar.")
+        st.warning("No manual packing plan uploaded via sidebar.")
+        st.caption("Please upload the 'latest_packing_plan.xlsx' file using the sidebar.")
         return
 
     try:
@@ -289,7 +297,7 @@ def manual_packing_plan():
         # Process each selected item
         for selected_item in selected_items:
             try:
-                st.subheader(f"📦 {selected_item}")
+                st.markdown(f"**{selected_item}**")
                 target_weight = st.number_input(
                     f"Enter weight to pack for {selected_item} (kg):", 
                     min_value=1, 
@@ -402,15 +410,20 @@ def manual_packing_plan():
                 pdf_data = generate_combined_pdf(packing_summary, total_combined_weight, total_combined_loose)
                 if pdf_data:
                     st.download_button(
-                        "📄 Download Combined Packing Plan PDF", 
+                        "Download Combined Packing Plan PDF", 
                         data=pdf_data, 
                         file_name="MithilaFoods_PackingPlan.pdf", 
-                        mime="application/pdf"
+                        mime="application/pdf",
+                        use_container_width=True
                     )
                     
                     # Display summary
-                    st.success(f"✅ Packing plan generated for {len(selected_items)} items")
-                    st.info(f"📊 Total Packed: {total_combined_weight:.2f} kg | Total Loose: {total_combined_loose:.2f} kg")
+                    st.caption(f"Packing plan generated for {len(selected_items)} items")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Total Packed", f"{total_combined_weight:.2f} kg")
+                    with col2:
+                        st.metric("Total Loose", f"{total_combined_loose:.2f} kg")
                 else:
                     st.error("Failed to generate PDF. Please try again.")
             except Exception as e:
