@@ -48,34 +48,52 @@ def load_master_data():
                 sheet_url = f.read().strip()
             
             if sheet_url:
-                st.info("📊 Loading latest data from Google Sheets...")
+                # Use columns to display messages in one line
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    st.info("📊 Loading latest data from Google Sheets...")
                 df, error = load_from_google_sheet(sheet_url)
                 
                 if df is not None:
-                    st.success(f"✅ Loaded {len(df)} products from Google Sheets")
+                    with col2:
+                        st.success(f"✅ Loaded {len(df)} products from Google Sheets")
                     return df
                 else:
-                    st.warning(f"⚠️ Google Sheets error: {error}. Trying backup...")
+                    with col2:
+                        st.warning(f"⚠️ Google Sheets error: {error}. Trying backup...")
                     
         except Exception as e:
-            st.warning(f"⚠️ Could not load from Google Sheets: {str(e)}. Trying backup...")
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                st.info("📊 Loading latest data from Google Sheets...")
+            with col2:
+                st.warning(f"⚠️ Could not load from Google Sheets: {str(e)}. Trying backup...")
     
     # Try default Google Sheet URL
     if not os.path.exists(master_url_file):
         try:
-            st.info("📊 Loading data from default Google Sheets...")
+            # Use columns to display messages in one line
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                st.info("📊 Loading data from default Google Sheets...")
             df, error = load_from_google_sheet(DEFAULT_MASTER_SHEET_URL)
             
             if df is not None:
-                st.success(f"✅ Loaded {len(df)} products from Google Sheets")
+                with col2:
+                    st.success(f"✅ Loaded {len(df)} products from Google Sheets")
                 # Save the working URL
                 with open(master_url_file, "w") as f:
                     f.write(DEFAULT_MASTER_SHEET_URL)
                 return df
             else:
-                st.warning(f"⚠️ Default Google Sheets error: {error}. Trying local backup...")
+                with col2:
+                    st.warning(f"⚠️ Default Google Sheets error: {error}. Trying local backup...")
         except Exception as e:
-            st.warning(f"⚠️ Could not load from default Google Sheets: {str(e)}. Trying local backup...")
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                st.info("📊 Loading data from default Google Sheets...")
+            with col2:
+                st.warning(f"⚠️ Could not load from default Google Sheets: {str(e)}. Trying local backup...")
     
     # Fallback to local Excel file
     if os.path.exists(MASTER_FILE):

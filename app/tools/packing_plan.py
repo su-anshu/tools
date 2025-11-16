@@ -7,35 +7,22 @@ from io import BytesIO
 from collections import defaultdict
 from datetime import datetime
 import os
-import contextlib
 import logging
 import hashlib
-from app.sidebar import sidebar_controls, load_master_data, MASTER_FILE, BARCODE_PDF_PATH
+from app.sidebar import MASTER_FILE, BARCODE_PDF_PATH
 from app.tools.label_generator import generate_combined_label_pdf_direct, generate_pdf, generate_triple_label_combined
-from app.tools.product_label_generator import create_label_pdf
+from app.tools.product_label_generator import create_label_pdf, create_pair_label_pdf
+from app.utils import (
+    is_empty_value, get_unique_key_suffix, setup_tool_ui, 
+    load_and_validate_master_data, should_include_product_label,
+    initialize_packing_plan_variables, create_packing_plan_tabs,
+    create_download_buttons
+)
+from app.pdf_utils import safe_pdf_context
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Utility functions
-def is_empty_value(value):
-    """Standardized check for empty/invalid values"""
-    if pd.isna(value):
-        return True
-    if value is None:
-        return True
-    str_value = str(value).strip().lower()
-    return str_value in ["", "nan", "none", "null", "n/a"]
-
-@contextlib.contextmanager
-def safe_pdf_context(pdf_bytes):
-    """Context manager for safe PDF handling"""
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    try:
-        yield doc
-    finally:
-        doc.close()
 
 def validate_uploaded_file(uploaded_file, max_size_mb=50):
     """Validate uploaded files before processing"""
@@ -153,13 +140,116 @@ def highlight_large_qty(pdf_bytes):
         logger.error(f"Error highlighting PDF: {str(e)}")
         return None
 
+def validate_asin_context(line, line_index, all_lines, asin):
+    """
+    Validate if ASIN appears in valid invoice table context vs address sections
+    
+    Args:
+        line: The line containing the ASIN
+        line_index: Index of the line in all_lines
+        all_lines: All lines from the page
+        asin: The extracted ASIN
+    
+    Returns:
+        bool: True if ASIN appears in valid context, False otherwise
+    """
+    # Check if we're in invoice table section (between "Description" and "TOTAL")
+    in_invoice_table = False
+    description_found = False
+    total_found = False
+    
+    # Look backwards and forwards to determine context
+    look_back = max(0, line_index - 20)
+    look_forward = min(len(all_lines), line_index + 20)
+    
+    for i in range(look_back, look_forward):
+        if i >= len(all_lines):
+            break
+        line_text = all_lines[i].upper()
+        
+        # Check for invoice table markers
+        if "DESCRIPTION" in line_text and ("QTY" in line_text or "QUANTITY" in line_text):
+            description_found = True
+            in_invoice_table = True
+        
+        # Check for end of table
+        if "TOTAL" in line_text and description_found:
+            if i > line_index:
+                total_found = True
+                break
+    
+    # If we found description but not total yet, we're likely in the table
+    if description_found and not total_found and line_index > look_back:
+        in_invoice_table = True
+    
+    # Check for address/shipping indicators (negative signals)
+    address_keywords = [
+        "SHIP TO", "DELIVERY ADDRESS", "SHIPPING ADDRESS", "BILLING ADDRESS",
+        "PIN CODE", "PINCODE", "POSTAL CODE", "STATE:", "CITY:",
+        "MOBILE", "PHONE", "CONTACT", "CUSTOMER NAME"
+    ]
+    
+    context_text = " ".join(all_lines[max(0, line_index-5):min(len(all_lines), line_index+5)]).upper()
+    is_in_address = any(keyword in context_text for keyword in address_keywords)
+    
+    # Check for positive signals - ASIN near product-related content
+    product_indicators = ["HSN", "NET WEIGHT", "MRP", "UNIT PRICE", "DISCOUNT", "TAX"]
+    has_product_context = any(indicator in line.upper() for indicator in product_indicators)
+    
+    # ASIN is valid if:
+    # 1. In invoice table section AND not in address section
+    # 2. OR has product context (HSN, price, etc.) AND not in address section
+    if is_in_address:
+        return False
+    
+    if in_invoice_table or has_product_context:
+        return True
+    
+    # If context is ambiguous, be conservative and reject
+    return False
+
 def extract_asin_from_page(page_text):
-    """Extract ASIN from page text"""
+    """Extract ASIN from page text with context validation"""
     asin_pattern = re.compile(r"\b(B[0-9A-Z]{9})\b")
-    match = asin_pattern.search(page_text)
-    if match:
-        return match.group(1)
-    return None
+    lines = page_text.split("\n")
+    
+    # Look for ASINs - prefer those in invoice table context, but accept others if not in address
+    best_asin = None
+    best_asin_score = 0
+    
+    for i, line in enumerate(lines):
+        match = asin_pattern.search(line)
+        if match:
+            asin = match.group(1)
+            # Validate context - returns True if valid, False if invalid
+            is_valid = validate_asin_context(line, i, lines, asin)
+            
+            if is_valid:
+                # Score ASINs: higher score for those in invoice table or with product context
+                score = 0
+                line_upper = line.upper()
+                if "DESCRIPTION" in " ".join(lines[max(0, i-10):i]).upper():
+                    score += 2  # In invoice table area
+                if any(indicator in line_upper for indicator in ["HSN", "MRP", "UNIT PRICE", "TAX"]):
+                    score += 1  # Has product context
+                
+                if score > best_asin_score:
+                    best_asin = asin
+                    best_asin_score = score
+            else:
+                # If validation failed, check if it's just ambiguous (not clearly in address)
+                # In that case, still consider it but with lower priority
+                context_text = " ".join(lines[max(0, i-5):min(len(lines), i+5)]).upper()
+                is_in_address = any(keyword in context_text for keyword in 
+                                    ["SHIP TO", "DELIVERY ADDRESS", "SHIPPING ADDRESS", "BILLING ADDRESS",
+                                     "PIN CODE", "PINCODE", "POSTAL CODE"])
+                
+                if not is_in_address and best_asin is None:
+                    # Accept ambiguous ASINs if no better one found and not clearly in address
+                    best_asin = asin
+                    best_asin_score = 0
+    
+    return best_asin
 
 def get_product_name_from_asin(asin, master_df):
     """
@@ -428,78 +518,27 @@ def sort_pdf_by_asin(pdf_bytes, master_df=None, asin_lookup_dict=None):
         logger.error(f"Error sorting PDF by ASIN: {str(e)}")
         return None
 
+
 def packing_plan_tool():
-    # Inject custom CSS first - MUST be called before any other UI
-    try:
-        from app.utils.ui_components import inject_custom_css
-        inject_custom_css()
-        css_loaded = True
-    except Exception as e:
-        logger.warning(f"Could not inject CSS: {e}")
-        css_loaded = False
+    # Setup UI with CSS and components
+    css_loaded, UI_ENABLED = setup_tool_ui("Amazon Packing Plan Generator", load_ui_components=True)
     
-    # Inject UI components
-    try:
-        from app.utils.ui_components import (
-            welcome_header, section_header, metric_card, info_card,
-            status_badge, section_divider, custom_card, connection_badge
-        )
-        UI_ENABLED = True
-    except ImportError as e:
-        UI_ENABLED = False
-        logger.warning(f"UI components not available: {e}, using default styling")
+    # Load and validate master data
+    master_df, admin_logged_in, BARCODE_PDF_PATH = load_and_validate_master_data(return_barcode_path=True)
+
+    # Organize content into tabs
+    tab1, tab2, tab3, tab4 = create_packing_plan_tabs()
     
-    # Minimal header - simple title only
-    st.markdown("### Packing Plan Generator")
-    
-    admin_logged_in, _, BARCODE_PDF_PATH, _ = sidebar_controls()
-
-    # Load master data from Google Sheets or Excel backup
-    master_df = load_master_data()
-    if master_df is None:
-        st.stop()
-        return
-
-    # Clean column names
-    master_df.columns = master_df.columns.str.strip()
-    logger.info(f"Loaded master data with {len(master_df)} products")
-
-    # Helper function to generate unique key suffix from data
-    def get_unique_key_suffix(data):
-        """Generate unique key suffix from data hash to prevent duplicate widget keys"""
-        try:
-            if isinstance(data, pd.DataFrame):
-                hash_data = pd.util.hash_pandas_object(data).values
-                return hashlib.md5(hash_data.tobytes()).hexdigest()[:8]
-            elif isinstance(data, BytesIO):
-                # For BytesIO, hash the content
-                pos = data.tell()
-                data.seek(0)
-                content = data.read()
-                data.seek(pos)
-                return hashlib.md5(content).hexdigest()[:8]
-            elif isinstance(data, bytes):
-                return hashlib.md5(data).hexdigest()[:8]
-            else:
-                # Fallback: use string representation
-                return hashlib.md5(str(data).encode()).hexdigest()[:8]
-        except Exception as e:
-            logger.warning(f"Error generating key suffix: {e}")
-            # Fallback to timestamp
-            return datetime.now().strftime("%H%M%S")
-
-    # Organize content into tabs - Simple titles
-    tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload", "📊 Results", "📥 Downloads", "🏷️ Labels"])
-    
-    # Initialize variables to prevent "referenced before assignment" errors
-    df_orders = pd.DataFrame()
-    df_physical = pd.DataFrame()
-    missing_products = []
-    total_orders = 0
-    total_physical_items = 0
-    total_qty_ordered = 0
-    total_qty_physical = 0
-    sorted_highlighted_pdf = None
+    # Initialize variables
+    vars_dict = initialize_packing_plan_variables()
+    df_orders = vars_dict['df_orders']
+    df_physical = vars_dict['df_physical']
+    missing_products = vars_dict['missing_products']
+    total_orders = vars_dict['total_orders']
+    total_physical_items = vars_dict['total_physical_items']
+    total_qty_ordered = vars_dict['total_qty_ordered']
+    total_qty_physical = vars_dict['total_qty_physical']
+    sorted_highlighted_pdf = vars_dict['sorted_highlighted_pdf']
     
     with tab1:
         # File Upload Section - Simple and compact
@@ -1028,53 +1067,115 @@ def packing_plan_tool():
                     pages_text = [page.get_text().split("\n") for page in doc]
 
                     for lines in pages_text:
+                        # Track location context for invoice table vs address sections
+                        in_invoice_table = False
+                        description_found = False
+                        
                         for i, line in enumerate(lines):
+                            # Update location tracking
+                            line_upper = line.upper()
+                            if "DESCRIPTION" in line_upper and ("QTY" in line_upper or "QUANTITY" in line_upper):
+                                description_found = True
+                                in_invoice_table = True
+                            
+                            if "TOTAL" in line_upper and description_found:
+                                in_invoice_table = False
+                            
+                            # Check for address sections (negative signal)
+                            address_keywords = [
+                                "SHIP TO", "DELIVERY ADDRESS", "SHIPPING ADDRESS", "BILLING ADDRESS",
+                                "PIN CODE", "PINCODE", "POSTAL CODE"
+                            ]
+                            is_in_address = any(keyword in line_upper for keyword in address_keywords)
+                            if is_in_address:
+                                in_invoice_table = False
+                            
+                            # Extract ASIN with context validation
                             asin_match = asin_pattern.search(line)
                             if asin_match:
                                 asin = asin_match.group(1)
+                                
+                                # Check for positive signals (product-related context)
+                                has_product_context = any(indicator in line_upper for indicator in 
+                                                         ["HSN", "NET WEIGHT", "MRP", "UNIT PRICE", "DISCOUNT", "TAX", "IGST", "CGST", "SGST"])
+                                
+                                # Check surrounding context for address indicators (more comprehensive check)
+                                context_start = max(0, i - 5)
+                                context_end = min(len(lines), i + 5)
+                                context_lines = lines[context_start:context_end]
+                                context_text = " ".join(context_lines).upper()
+                                
+                                # Strong address indicators - if found, definitely skip
+                                strong_address_patterns = [
+                                    r"SHIP\s+TO\s*:?", r"DELIVERY\s+ADDRESS\s*:?", r"SHIPPING\s+ADDRESS\s*:?",
+                                    r"BILLING\s+ADDRESS\s*:?", r"PIN\s*CODE\s*:?", r"PINCODE\s*:?",
+                                    r"POSTAL\s+CODE\s*:?", r"STATE\s*:?", r"CITY\s*:?"
+                                ]
+                                is_in_strong_address = any(re.search(pattern, context_text) for pattern in strong_address_patterns)
+                                
+                                # Check if line itself contains address keywords
+                                address_in_line = any(keyword in line_upper for keyword in 
+                                                      ["SHIP TO", "DELIVERY ADDRESS", "SHIPPING ADDRESS", 
+                                                       "BILLING ADDRESS", "PIN CODE", "PINCODE", "POSTAL CODE"])
+                                
+                                # Only skip if clearly in address section AND not in invoice table AND no product context
+                                if (is_in_strong_address or address_in_line) and not in_invoice_table and not has_product_context:
+                                    logger.debug(f"Skipping ASIN {asin} - found in address section: {line.strip()[:50]}")
+                                    continue
+                                
+                                # Pre-validate against master data to filter false positives
+                                # Only reject if: not in master AND clearly in address context AND no product context AND not in invoice table
+                                if asin_lookup_dict and asin not in asin_lookup_dict:
+                                    if (is_in_strong_address or address_in_line) and not has_product_context and not in_invoice_table:
+                                        logger.debug(f"Skipping ASIN {asin} - not in master, in address context, no product context: {line.strip()[:50]}")
+                                        continue
+                                    # Otherwise, accept it (might be new product or legitimate ASIN)
+                                    logger.info(f"ASIN {asin} not found in master data but accepted (context: invoice_table={in_invoice_table}, product_context={has_product_context})")
+                                
                                 qty = 1
                                 # IMPROVED: Look for quantity in next 6 lines (was 4)
                                 search_range = min(i + 6, len(lines))
                                 for j in range(i, search_range):
-                                    line = lines[j]
+                                    qty_line = lines[j]
                                     
                                     # Pattern 1: Original Qty pattern
-                                    match = qty_pattern.search(line)
+                                    match = qty_pattern.search(qty_line)
                                     if match:
                                         qty = int(match.group(1))
-                                        logger.info(f"Found qty {qty} using Qty pattern: {line.strip()}")
+                                        logger.info(f"Found qty {qty} using Qty pattern: {qty_line.strip()}")
                                         break
                                     
                                     # Pattern 2: Original price pattern  
-                                    match = price_qty_pattern.search(line)
+                                    match = price_qty_pattern.search(qty_line)
                                     if match:
                                         qty = int(match.group(1))
-                                        logger.info(f"Found qty {qty} using price pattern: {line.strip()}")
+                                        logger.info(f"Found qty {qty} using price pattern: {qty_line.strip()}")
                                         break
                                     
                                     # Pattern 3: NEW - Multi-item pattern like "3 ₹2,768.67 5% IGST"
-                                    multi_item_match = re.search(r'^(\d+)\s+₹[\d,]+\.?\d*\s+\d+%?\s*(IGST|CGST|SGST)', line.strip())
+                                    multi_item_match = re.search(r'^(\d+)\s+₹[\d,]+\.?\d*\s+\d+%?\s*(IGST|CGST|SGST)', qty_line.strip())
                                     if multi_item_match:
                                         potential_qty = int(multi_item_match.group(1))
                                         if 1 <= potential_qty <= 100:
                                             qty = potential_qty
-                                            logger.info(f"Found qty {qty} using multi-item pattern: {line.strip()}")
+                                            logger.info(f"Found qty {qty} using multi-item pattern: {qty_line.strip()}")
                                             break
                                     
                                     # Pattern 4: NEW - Standalone number followed by price (but not tax %)
-                                    standalone_match = re.search(r'^(\d+)', line.strip())
+                                    standalone_match = re.search(r'^(\d+)', qty_line.strip())
                                     if standalone_match:
                                         potential_qty = int(standalone_match.group(1))
                                         # Avoid tax percentages and ensure it's reasonable quantity
                                         if (1 <= potential_qty <= 100 and 
-                                            not re.search(r'^' + str(potential_qty) + r'%', line.strip()) and
-                                            not re.search(r'HSN:', line) and
-                                            re.search(r'₹[\d,]+\.?\d*', line)):
+                                            not re.search(r'^' + str(potential_qty) + r'%', qty_line.strip()) and
+                                            not re.search(r'HSN:', qty_line) and
+                                            re.search(r'₹[\d,]+\.?\d*', qty_line)):
                                             qty = potential_qty
-                                            logger.info(f"Found qty {qty} using standalone pattern: {line.strip()}")
+                                            logger.info(f"Found qty {qty} using standalone pattern: {qty_line.strip()}")
                                             break
                                 
                                 asin_qty_data[asin] += qty
+                                logger.info(f"Added ASIN {asin} with qty {qty} (context: invoice_table={in_invoice_table}, product_context={has_product_context})")
 
             except (ValueError, KeyError, IOError, OSError) as e:
                 # Phase 3: Specific exception handling
@@ -1268,43 +1369,25 @@ def packing_plan_tool():
             # Generate unique key suffix from data
             pdf_key_suffix = get_unique_key_suffix(df_physical)
             
-            # Simple download buttons
-            col1, col2 = st.columns(2)
+            # Generate summary PDF
+            summary_pdf = None
+            try:
+                summary_pdf = generate_summary_pdf(df_orders, df_physical, missing_products)
+            except Exception as e:
+                st.error(f"Error generating PDF: {str(e)}")
             
-            with col1:
-                try:
-                    summary_pdf = generate_summary_pdf(df_orders, df_physical, missing_products)
-                    if summary_pdf:
-                        st.download_button(
-                            "Packing Plan PDF", 
-                            data=summary_pdf, 
-                            file_name="Packing_Plan.pdf", 
-                            mime="application/pdf", 
-                            key=f"download_packing_plan_pdf_{pdf_key_suffix}",
-                            use_container_width=True
-                        )
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-
-            with col2:
-                try:
-                    excel_buffer = BytesIO()
-                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                        df_physical.to_excel(writer, index=False, sheet_name="Physical Packing Plan")
-                        df_orders.to_excel(writer, index=False, sheet_name="Original Orders")
-                        if missing_products:
-                            pd.DataFrame(missing_products).to_excel(writer, index=False, sheet_name="Missing Products")
-                    excel_buffer.seek(0)
-                    st.download_button(
-                        "Excel Workbook", 
-                        data=excel_buffer, 
-                        file_name="Packing_Plan.xlsx", 
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                        key=f"download_packing_plan_excel_{pdf_key_suffix}",
-                        use_container_width=True
-                    )
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+            # Create download buttons
+            missing_products_df = pd.DataFrame(missing_products) if missing_products else None
+            create_download_buttons(
+                pdf_data=summary_pdf,
+                excel_dataframes=[("Physical Packing Plan", df_physical), ("Original Orders", df_orders)],
+                pdf_filename="Packing_Plan.pdf",
+                excel_filename="Packing_Plan.xlsx",
+                key_suffix=f"packing_plan_{pdf_key_suffix}",
+                pdf_label="Packing Plan PDF",
+                excel_label="Excel Workbook",
+                missing_products_df=missing_products_df
+            )
             
             st.markdown("---")
             
@@ -1450,11 +1533,14 @@ def packing_plan_tool():
                     ]
                     
                     if not sticker_house_products.empty:
-                        # Get unique product names
-                        unique_product_names = sticker_house_products["item"].dropna().unique().tolist()
-                        unique_product_names = [str(name).strip() for name in unique_product_names if str(name).strip() and str(name).strip().lower() != 'nan']
+                        # Filter out rows with invalid product names
+                        sticker_house_products = sticker_house_products[
+                            sticker_house_products["item"].notna() & 
+                            (sticker_house_products["item"].astype(str).str.strip() != "") &
+                            (sticker_house_products["item"].astype(str).str.strip().str.lower() != "nan")
+                        ]
                         
-                        if unique_product_names:
+                        if not sticker_house_products.empty:
                             # Check if product labels already generated for this data
                             product_label_cache_key = f'product_label_cache_{data_hash}'
                             
@@ -1466,21 +1552,45 @@ def packing_plan_tool():
                                         product_labels_with_date = fitz.open()
                                         product_labels_without_date = fitz.open()
                                         
-                                        for product_name in unique_product_names:
+                                        # Create a flat list of all product names (repeated by quantity)
+                                        # Only include products with "Product Label" = "Yes" in master data
+                                        product_list = []
+                                        for _, row in sticker_house_products.iterrows():
                                             try:
+                                                product_name = str(row.get("item", "")).strip()
+                                                qty = int(row.get("Qty", 1))
+                                                
+                                                if not product_name or product_name.lower() == "nan":
+                                                    continue
+                                                
+                                                # Check if product should be included based on "Product Label" column
+                                                if should_include_product_label(product_name, master_df, row):
+                                                    # Add product name qty times to the list
+                                                    product_list.extend([product_name] * qty)
+                                                else:
+                                                    logger.debug(f"Product '{product_name}' excluded from labels (Product Label != 'Yes')")
+                                            except Exception as e:
+                                                logger.warning(f"Could not process product for {row.get('item', 'unknown')}: {e}")
+                                        
+                                        # Process product list in pairs (2 labels per page)
+                                        for i in range(0, len(product_list), 2):
+                                            try:
+                                                product1 = product_list[i]
+                                                product2 = product_list[i + 1] if i + 1 < len(product_list) else None
+                                                
                                                 # Generate label with date (96x25mm - two labels side by side)
-                                                label_pdf_bytes_with_date = create_label_pdf(product_name, "96x25mm", include_date=True)
+                                                label_pdf_bytes_with_date = create_pair_label_pdf(product1, product2, include_date=True)
                                                 if label_pdf_bytes_with_date:
                                                     with safe_pdf_context(label_pdf_bytes_with_date) as label_doc:
                                                         product_labels_with_date.insert_pdf(label_doc)
                                                 
                                                 # Generate label without date (96x25mm - two labels side by side)
-                                                label_pdf_bytes_without_date = create_label_pdf(product_name, "96x25mm", include_date=False)
+                                                label_pdf_bytes_without_date = create_pair_label_pdf(product1, product2, include_date=False)
                                                 if label_pdf_bytes_without_date:
                                                     with safe_pdf_context(label_pdf_bytes_without_date) as label_doc:
                                                         product_labels_without_date.insert_pdf(label_doc)
                                             except Exception as e:
-                                                logger.warning(f"Could not generate product label for {product_name}: {e}")
+                                                logger.warning(f"Could not generate product label pair: {e}")
                                         
                                         # Save to buffers
                                         product_label_buffer_with_date = BytesIO()
@@ -1506,14 +1616,15 @@ def packing_plan_tool():
                                         product_labels_without_date.close()
                                         
                                         # Store in session state (store bytes for reliable downloads)
+                                        total_label_count = int(sticker_house_products['Qty'].sum()) if 'Qty' in sticker_house_products.columns else 0
                                         st.session_state[product_label_cache_key] = {
                                             'with_date': product_label_bytes_with_date,
                                             'without_date': product_label_bytes_without_date,
-                                            'count': len(unique_product_names)
+                                            'count': total_label_count
                                         }
                                         st.session_state[f'{product_label_cache_key}_hash'] = data_hash
                                         
-                                        logger.info(f"Product labels generated for {len(unique_product_names)} products")
+                                        logger.info(f"Product labels generated: {total_label_count} total labels")
                                     except Exception as e:
                                         logger.error(f"Error generating product labels: {str(e)}")
                                         st.error(f"❌ **Error Generating Product Labels**: {str(e)}")
@@ -1530,41 +1641,25 @@ def packing_plan_tool():
                             
                             # Display product label download buttons
                             cached_labels = st.session_state.get(product_label_cache_key, {})
-                            product_label_count = cached_labels.get('count', len(unique_product_names))
+                            total_label_count = cached_labels.get('count', int(sticker_house_products['Qty'].sum()) if 'Qty' in sticker_house_products.columns else 0)
                             product_label_bytes_with_date = cached_labels.get('with_date', b'')
                             product_label_bytes_without_date = cached_labels.get('without_date', b'')
                             
-                            if product_label_count > 0:
-                                st.caption(f"Product labels for {product_label_count} unique products")
+                            if total_label_count > 0:
+                                st.caption(f"Product labels: {total_label_count} total labels")
                                 
-                                # Two download buttons side by side
-                                col1, col2 = st.columns(2)
-                                
-                                with col1:
-                                    if product_label_bytes_with_date and len(product_label_bytes_with_date) > 0:
-                                        st.download_button(
-                                            "📥 Download with Date",
-                                            data=product_label_bytes_with_date,
-                                            file_name=f"Product_Labels_With_Date_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                                            mime="application/pdf",
-                                            key=f"download_product_labels_with_date_{data_hash[:8]}",
-                                            use_container_width=True
-                                        )
-                                    else:
-                                        st.caption("No labels with date")
-                                
-                                with col2:
-                                    if product_label_bytes_without_date and len(product_label_bytes_without_date) > 0:
-                                        st.download_button(
-                                            "📥 Download without Date",
-                                            data=product_label_bytes_without_date,
-                                            file_name=f"Product_Labels_No_Date_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                                            mime="application/pdf",
-                                            key=f"download_product_labels_no_date_{data_hash[:8]}",
-                                            use_container_width=True
-                                        )
-                                    else:
-                                        st.caption("No labels without date")
+                                # Display download button for labels without date only
+                                if product_label_bytes_without_date and len(product_label_bytes_without_date) > 0:
+                                    st.download_button(
+                                        "📥 Download without Date",
+                                        data=product_label_bytes_without_date,
+                                        file_name=f"Product_Labels_No_Date_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                        mime="application/pdf",
+                                        key=f"download_product_labels_no_date_{data_hash[:8]}",
+                                        use_container_width=True
+                                    )
+                                else:
+                                    st.caption("No labels available")
                         else:
                             st.caption("No product names found for label generation")
                     else:
@@ -1619,8 +1714,6 @@ def packing_plan_tool():
                         st.caption("No MRP-only labels")
                     
                     mrp_only_pdf.close()
-                else:
-                    st.info("ℹ️ All items have valid FNSKUs. No separate MRP-only labels needed.")
             except Exception as e:
                 st.error(f"Error generating MRP-only labels: {str(e)}")
 

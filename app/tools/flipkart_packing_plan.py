@@ -6,27 +6,23 @@ from fpdf import FPDF
 from io import BytesIO
 from collections import defaultdict
 from datetime import datetime
-import contextlib
 import logging
 import hashlib
-from app.sidebar import sidebar_controls, load_master_data, MASTER_FILE, BARCODE_PDF_PATH
+from app.sidebar import MASTER_FILE, BARCODE_PDF_PATH
 from app.tools.label_generator import generate_combined_label_pdf_direct, generate_pdf, generate_triple_label_combined
-from app.tools.product_label_generator import create_label_pdf
+from app.tools.product_label_generator import create_label_pdf, create_pair_label_pdf
 from app.data_loader import load_nutrition_data_silent
+from app.utils import (
+    is_empty_value, get_unique_key_suffix, setup_tool_ui,
+    load_and_validate_master_data, should_include_product_label,
+    initialize_packing_plan_variables, create_packing_plan_tabs,
+    create_download_buttons
+)
+from app.pdf_utils import safe_pdf_context
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Utility functions
-def is_empty_value(value):
-    """Standardized check for empty/invalid values"""
-    if pd.isna(value):
-        return True
-    if value is None:
-        return True
-    str_value = str(value).strip().lower()
-    return str_value in ["", "nan", "none", "null", "n/a"]
 
 def find_column_flexible(df, column_names):
     """
@@ -65,14 +61,6 @@ def find_column_flexible(df, column_names):
     
     return None
 
-@contextlib.contextmanager
-def safe_pdf_context(pdf_bytes):
-    """Context manager for safe PDF handling"""
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    try:
-        yield doc
-    finally:
-        doc.close()
 
 def normalize_weight(weight_str):
     """
@@ -1478,66 +1466,39 @@ def sort_pdf_by_sku_flipkart(pdf_bytes, master_df=None):
         logger.error(f"❌ Error sorting PDF by SKU: {e}", exc_info=True)
         return None
 
+# Alias for backward compatibility
+def should_include_product_label_flipkart(product_name, master_df, row=None):
+    """Flipkart-specific wrapper for should_include_product_label"""
+    return should_include_product_label(
+        product_name, master_df, row, 
+        id_column='SKU ID', 
+        find_column_func=find_column_flexible
+    )
+
 def flipkart_packing_plan_tool():
     """
     Main UI function for Flipkart Packing Plan Generator
     Phase 2: Full workflow with packing plan generation
     """
-    # Inject custom CSS
-    try:
-        from app.utils.ui_components import inject_custom_css
-        inject_custom_css()
-    except Exception:
-        pass
+    # Setup UI with CSS
+    setup_tool_ui("Flipkart Packing Plan Generator")
     
-    st.markdown("### Flipkart Packing Plan Generator")
-    
-    admin_logged_in, _, _, _ = sidebar_controls()
-    
-    # Load master data
-    master_df = load_master_data()
-    if master_df is None:
-        st.error("❌ Master data not available. Please configure data source in sidebar.")
-        st.stop()
-        return
-    
-    # Clean column names
-    master_df.columns = master_df.columns.str.strip()
-    logger.info(f"Loaded master data with {len(master_df)} products")
-    
-    # Helper function to generate unique key suffix from data
-    def get_unique_key_suffix(data):
-        """Generate unique key suffix from data hash to prevent duplicate widget keys"""
-        try:
-            if isinstance(data, pd.DataFrame):
-                hash_data = pd.util.hash_pandas_object(data).values
-                return hashlib.md5(hash_data.tobytes()).hexdigest()[:8]
-            elif isinstance(data, BytesIO):
-                pos = data.tell()
-                data.seek(0)
-                content = data.read()
-                data.seek(pos)
-                return hashlib.md5(content).hexdigest()[:8]
-            elif isinstance(data, bytes):
-                return hashlib.md5(data).hexdigest()[:8]
-            else:
-                return hashlib.md5(str(data).encode()).hexdigest()[:8]
-        except Exception as e:
-            logger.warning(f"Error generating key suffix: {e}")
-            return datetime.now().strftime("%H%M%S")
+    # Load and validate master data
+    master_df = load_and_validate_master_data()
     
     # Organize content into tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload", "📊 Results", "📥 Downloads", "🏷️ Labels"])
+    tab1, tab2, tab3, tab4 = create_packing_plan_tabs()
     
     # Initialize variables
-    df_orders = pd.DataFrame()
-    df_physical = pd.DataFrame()
-    missing_products = []
-    total_orders = 0
-    total_physical_items = 0
-    total_qty_ordered = 0
-    total_qty_physical = 0
-    sorted_highlighted_pdf = None  # Initialize sorted PDF variable
+    vars_dict = initialize_packing_plan_variables()
+    df_orders = vars_dict['df_orders']
+    df_physical = vars_dict['df_physical']
+    missing_products = vars_dict['missing_products']
+    total_orders = vars_dict['total_orders']
+    total_physical_items = vars_dict['total_physical_items']
+    total_qty_ordered = vars_dict['total_qty_ordered']
+    total_qty_physical = vars_dict['total_qty_physical']
+    sorted_highlighted_pdf = vars_dict['sorted_highlighted_pdf']
     
     # Initialize session state for sorted PDF if not exists
     if 'flipkart_sorted_pdf' not in st.session_state:
@@ -1988,42 +1949,25 @@ def flipkart_packing_plan_tool():
         if pdf_files and not df_physical.empty:
             pdf_key_suffix = get_unique_key_suffix(df_physical)
             
-            col1, col2 = st.columns(2)
+            # Generate summary PDF
+            summary_pdf = None
+            try:
+                summary_pdf = generate_summary_pdf_flipkart(df_orders, df_physical, missing_products)
+            except Exception as e:
+                st.error(f"Error generating PDF: {str(e)}")
             
-            with col1:
-                try:
-                    summary_pdf = generate_summary_pdf_flipkart(df_orders, df_physical, missing_products)
-                    if summary_pdf:
-                        st.download_button(
-                            "Packing Plan PDF", 
-                            data=summary_pdf, 
-                            file_name="Flipkart_Packing_Plan.pdf", 
-                            mime="application/pdf", 
-                            key=f"download_packing_plan_pdf_{pdf_key_suffix}",
-                            use_container_width=True
-                        )
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-            
-            with col2:
-                try:
-                    excel_buffer = BytesIO()
-                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                        df_physical.to_excel(writer, index=False, sheet_name="Physical Packing Plan")
-                        df_orders.to_excel(writer, index=False, sheet_name="Original Orders")
-                        if missing_products:
-                            pd.DataFrame(missing_products).to_excel(writer, index=False, sheet_name="Missing Products")
-                    excel_buffer.seek(0)
-                    st.download_button(
-                        "Excel Workbook", 
-                        data=excel_buffer, 
-                        file_name="Flipkart_Packing_Plan.xlsx", 
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                        key=f"download_packing_plan_excel_{pdf_key_suffix}",
-                        use_container_width=True
-                    )
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+            # Create download buttons
+            missing_products_df = pd.DataFrame(missing_products) if missing_products else None
+            create_download_buttons(
+                pdf_data=summary_pdf,
+                excel_dataframes=[("Physical Packing Plan", df_physical), ("Original Orders", df_orders)],
+                pdf_filename="Flipkart_Packing_Plan.pdf",
+                excel_filename="Flipkart_Packing_Plan.xlsx",
+                key_suffix=f"flipkart_packing_plan_{pdf_key_suffix}",
+                pdf_label="Packing Plan PDF",
+                excel_label="Excel Workbook",
+                missing_products_df=missing_products_df
+            )
             
             st.markdown("---")
             
@@ -2177,6 +2121,153 @@ def flipkart_packing_plan_tool():
                     with st.expander("⚠️ Products Skipped from Label Generation", expanded=False):
                         skipped_df = pd.DataFrame(skipped_products)
                         st.dataframe(skipped_df, use_container_width=True)
+                
+                # Product Labels Section (96x25mm - two labels side by side)
+                # This section is outside the try-except to ensure it always shows
+                st.markdown("---")
+                st.markdown("**Product Labels (96x25mm)**")
+                
+                # Extract unique product names from sticker and house labels
+                try:
+                    sticker_house_products = df_physical[
+                        df_physical["Packet used"].astype(str).str.strip().str.lower().isin(["sticker", "house"])
+                    ]
+                    
+                    if not sticker_house_products.empty:
+                        # Filter out rows with invalid product names
+                        sticker_house_products = sticker_house_products[
+                            sticker_house_products["item"].notna() & 
+                            (sticker_house_products["item"].astype(str).str.strip() != "") &
+                            (sticker_house_products["item"].astype(str).str.strip().str.lower() != "nan")
+                        ]
+                        
+                        if not sticker_house_products.empty:
+                            # Check if product labels already generated for this data
+                            product_label_cache_key = f'flipkart_product_label_cache_{data_hash}'
+                            
+                            if product_label_cache_key not in st.session_state or st.session_state.get(f'{product_label_cache_key}_hash') != data_hash:
+                                # Generate product labels
+                                with st.spinner("🔄 Generating product labels..."):
+                                    try:
+                                        # Create combined PDFs for product labels
+                                        product_labels_with_date = fitz.open()
+                                        product_labels_without_date = fitz.open()
+                                        
+                                        # Create a flat list of all product names (repeated by quantity)
+                                        # Only include products with "Product Label" = "Yes" in master data
+                                        product_list = []
+                                        for _, row in sticker_house_products.iterrows():
+                                            try:
+                                                product_name = str(row.get("item", "")).strip()
+                                                qty = int(row.get("Qty", 1))
+                                                
+                                                if not product_name or product_name.lower() == "nan":
+                                                    continue
+                                                
+                                                # Check if product should be included based on "Product Label" column
+                                                if should_include_product_label_flipkart(product_name, master_df, row):
+                                                    # Add product name qty times to the list
+                                                    product_list.extend([product_name] * qty)
+                                                else:
+                                                    logger.debug(f"Product '{product_name}' excluded from labels (Product Label != 'Yes')")
+                                            except Exception as e:
+                                                logger.warning(f"Could not process product for {row.get('item', 'unknown')}: {e}")
+                                        
+                                        # Process product list in pairs (2 labels per page)
+                                        for i in range(0, len(product_list), 2):
+                                            try:
+                                                product1 = product_list[i]
+                                                product2 = product_list[i + 1] if i + 1 < len(product_list) else None
+                                                
+                                                # Generate label with date (96x25mm - two labels side by side)
+                                                label_pdf_bytes_with_date = create_pair_label_pdf(product1, product2, include_date=True)
+                                                if label_pdf_bytes_with_date:
+                                                    with safe_pdf_context(label_pdf_bytes_with_date) as label_doc:
+                                                        product_labels_with_date.insert_pdf(label_doc)
+                                                
+                                                # Generate label without date (96x25mm - two labels side by side)
+                                                label_pdf_bytes_without_date = create_pair_label_pdf(product1, product2, include_date=False)
+                                                if label_pdf_bytes_without_date:
+                                                    with safe_pdf_context(label_pdf_bytes_without_date) as label_doc:
+                                                        product_labels_without_date.insert_pdf(label_doc)
+                                            except Exception as e:
+                                                logger.warning(f"Could not generate product label pair: {e}")
+                                        
+                                        # Save to buffers
+                                        product_label_buffer_with_date = BytesIO()
+                                        product_label_buffer_without_date = BytesIO()
+                                        
+                                        if len(product_labels_with_date) > 0:
+                                            product_labels_with_date.save(product_label_buffer_with_date)
+                                            product_label_buffer_with_date.seek(0)
+                                            # Store bytes for reliable downloads
+                                            product_label_bytes_with_date = product_label_buffer_with_date.getvalue()
+                                        else:
+                                            product_label_bytes_with_date = b''
+                                        
+                                        if len(product_labels_without_date) > 0:
+                                            product_labels_without_date.save(product_label_buffer_without_date)
+                                            product_label_buffer_without_date.seek(0)
+                                            # Store bytes for reliable downloads
+                                            product_label_bytes_without_date = product_label_buffer_without_date.getvalue()
+                                        else:
+                                            product_label_bytes_without_date = b''
+                                        
+                                        product_labels_with_date.close()
+                                        product_labels_without_date.close()
+                                        
+                                        # Store in session state (store bytes for reliable downloads)
+                                        total_label_count = int(sticker_house_products['Qty'].sum()) if 'Qty' in sticker_house_products.columns else 0
+                                        st.session_state[product_label_cache_key] = {
+                                            'with_date': product_label_bytes_with_date,
+                                            'without_date': product_label_bytes_without_date,
+                                            'count': total_label_count
+                                        }
+                                        st.session_state[f'{product_label_cache_key}_hash'] = data_hash
+                                        
+                                        logger.info(f"Product labels generated: {total_label_count} total labels")
+                                    except Exception as e:
+                                        logger.error(f"Error generating product labels: {str(e)}")
+                                        st.error(f"❌ **Error Generating Product Labels**: {str(e)}")
+                                        # Set empty values
+                                        st.session_state[product_label_cache_key] = {
+                                            'with_date': b'',
+                                            'without_date': b'',
+                                            'count': 0
+                                        }
+                                        st.session_state[f'{product_label_cache_key}_hash'] = data_hash
+                            else:
+                                # Use cached values
+                                logger.info(f"Using cached product labels. Hash: {data_hash[:8]}...")
+                            
+                            # Display product label download buttons
+                            cached_labels = st.session_state.get(product_label_cache_key, {})
+                            total_label_count = cached_labels.get('count', int(sticker_house_products['Qty'].sum()) if 'Qty' in sticker_house_products.columns else 0)
+                            product_label_bytes_with_date = cached_labels.get('with_date', b'')
+                            product_label_bytes_without_date = cached_labels.get('without_date', b'')
+                            
+                            if total_label_count > 0:
+                                st.caption(f"Product labels: {total_label_count} total labels")
+                                
+                                # Display download button for labels without date only
+                                if product_label_bytes_without_date and len(product_label_bytes_without_date) > 0:
+                                    st.download_button(
+                                        "📥 Download without Date",
+                                        data=product_label_bytes_without_date,
+                                        file_name=f"Flipkart_Product_Labels_No_Date_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                        mime="application/pdf",
+                                        key=f"download_flipkart_product_labels_no_date_{data_hash[:8]}",
+                                        use_container_width=True
+                                    )
+                                else:
+                                    st.caption("No labels available")
+                        else:
+                            st.caption("No product names found for label generation")
+                    else:
+                        st.caption("No sticker or house products found for product label generation")
+                except Exception as e:
+                    logger.error(f"Error in product labels section: {str(e)}")
+                    st.warning(f"⚠️ Error processing product labels: {str(e)}")
         else:
             if pdf_files:
                 st.info("ℹ️ No physical packing plan available for label generation.")

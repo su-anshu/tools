@@ -7,7 +7,7 @@ import logging
 # sidebar_controls and load_master_data now imported via utils
 from app.utils import (
     is_empty_value, detect_multi_item_orders, truncate_product_name, 
-    extract_month_day, safe_int_conversion, setup_tool_ui, 
+    extract_month_day, safe_int_conversion, setup_tool_ui,
     create_product_name_mapping
 )
 from reportlab.platypus import (
@@ -23,19 +23,27 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def easy_ship_report():
+def excel_column_to_index(column_letter):
+    """Convert Excel column letter (A, B, ..., Z, AA, AB, ..., AE) to 0-based index"""
+    result = 0
+    for char in column_letter.upper():
+        result = result * 26 + (ord(char) - ord('A') + 1)
+    return result - 1
+
+def flipkart_report():
     # Setup UI with CSS
-    setup_tool_ui("Easy Ship Order Report Generator")
+    setup_tool_ui("Flipkart Order Report Generator")
     
     # Load master data (allow None for backward compatibility)
     from app.sidebar import load_master_data
     mrp_df = load_master_data()
-    asin_map = pd.DataFrame()
+    sku_map = pd.DataFrame()
     
     if mrp_df is not None:
         try:
-            asin_map = create_product_name_mapping(mrp_df, id_column='ASIN')
-            if asin_map.empty:
+            # Try SKU-based mapping first, fallback to ASIN
+            sku_map = create_product_name_mapping(mrp_df, id_column='SKU', fallback_id_column='ASIN')
+            if sku_map.empty:
                 st.warning("Master data missing required columns (Name, Net Weight)")
         except Exception as e:
             st.warning(f"Could not process master data: {str(e)}")
@@ -43,8 +51,8 @@ def easy_ship_report():
     else:
         st.warning("Master data not available. Product names may not be cleaned.")
 
-    # Easy Ship file uploader
-    uploaded_file = st.file_uploader("Upload your Amazon Easy Ship Excel file", type="xlsx")
+    # Flipkart file uploader - support both Excel and CSV
+    uploaded_file = st.file_uploader("Upload your Flipkart Excel or CSV file", type=["xlsx", "csv"])
 
     if uploaded_file:
         try:
@@ -53,40 +61,107 @@ def easy_ship_report():
                 st.error("File too large. Please upload a file smaller than 50MB.")
                 return
 
-            # Read the Excel file
+            # Detect file type and read accordingly
+            file_extension = uploaded_file.name.split('.')[-1].lower() if uploaded_file.name else ''
+            is_csv = file_extension == 'csv' or uploaded_file.type == 'text/csv'
+            
             try:
-                # Try to read with automatic sheet detection
-                xl_file = pd.ExcelFile(uploaded_file)
-                if not xl_file.sheet_names:
-                    st.error("No sheets found in Excel file")
-                    return
-                
-                # Use first sheet if "Sheet1" doesn't exist
-                sheet_name = "Sheet1" if "Sheet1" in xl_file.sheet_names else xl_file.sheet_names[0]
-                df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
-                
-                if sheet_name != "Sheet1":
-                    st.info(f"Using sheet: {sheet_name}")
+                if is_csv:
+                    # Read CSV file
+                    # Reset file pointer to beginning
+                    uploaded_file.seek(0)
+                    df = pd.read_csv(uploaded_file, encoding='utf-8')
+                    # If UTF-8 fails, try other encodings
+                    if df.empty or df.columns[0].startswith('Unnamed'):
+                        uploaded_file.seek(0)
+                        try:
+                            df = pd.read_csv(uploaded_file, encoding='latin-1')
+                        except:
+                            uploaded_file.seek(0)
+                            df = pd.read_csv(uploaded_file, encoding='iso-8859-1')
+                    st.info("📄 CSV file detected and loaded")
+                else:
+                    # Read Excel file
+                    # Try to read with automatic sheet detection
+                    uploaded_file.seek(0)
+                    xl_file = pd.ExcelFile(uploaded_file)
+                    if not xl_file.sheet_names:
+                        st.error("No sheets found in Excel file")
+                        return
+                    
+                    # Use first sheet if "Sheet1" doesn't exist
+                    sheet_name = "Sheet1" if "Sheet1" in xl_file.sheet_names else xl_file.sheet_names[0]
+                    uploaded_file.seek(0)
+                    df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
+                    
+                    if sheet_name != "Sheet1":
+                        st.info(f"📊 Using Excel sheet: {sheet_name}")
+                    else:
+                        st.info("📊 Excel file detected and loaded")
                     
             except Exception as e:
-                st.error(f"Error reading Excel file: {str(e)}")
-                st.info("Please ensure the file is a valid Excel file with the correct format.")
+                file_type = "CSV" if is_csv else "Excel"
+                st.error(f"Error reading {file_type} file: {str(e)}")
+                st.info(f"Please ensure the file is a valid {file_type} file with the correct format.")
+                logger.error(f"Error reading {file_type} file: {str(e)}")
                 return
 
-            # Validate required columns
-            required_columns = ['tracking-id', 'asin', 'product-name', 'quantity-purchased', 'pickup-slot']
-            missing_columns = [col for col in required_columns if col not in df.columns]
+            # Map columns by position (works for both Excel and CSV)
+            # Column A (index 0): "Ordered On"
+            # Column AE (index 30): "Tracking ID"
+            # Column I (index 8): "SKU/Product Name" (used for both)
+            # Column S (index 18): "Quantity"
+            # Column AB/AC (index 27/28): "Dispatch by date"
             
-            if missing_columns:
-                st.error(f"Missing required columns: {missing_columns}")
-                st.info("Required columns: tracking-id, asin, product-name, quantity-purchased, pickup-slot")
+            try:
+                # Get column indices
+                col_a_idx = excel_column_to_index('A')  # 0
+                col_ae_idx = excel_column_to_index('AE')  # 30
+                col_i_idx = excel_column_to_index('I')  # 8
+                col_s_idx = excel_column_to_index('S')  # 18
+                # Try AB first (as user specified), fallback to AC if needed
+                col_ab_idx = excel_column_to_index('AB')  # 27
+                col_ac_idx = excel_column_to_index('AC')  # 28
+                
+                # Check if we have enough columns
+                max_col_idx = max(col_ae_idx, col_ac_idx)
+                if len(df.columns) <= max_col_idx:
+                    file_type = "CSV" if is_csv else "Excel"
+                    st.error(f"{file_type} file doesn't have enough columns. Expected at least {max_col_idx + 1} columns, found {len(df.columns)}")
+                    st.info(f"Please ensure the {file_type} file has columns A, I, S, AB/AC, and AE (or equivalent positions)")
+                    return
+                
+                # Use AB first (as user specified), fallback to AC if AB doesn't exist or has invalid data
+                if len(df.columns) > col_ab_idx:
+                    dispatch_date_idx = col_ab_idx
+                else:
+                    dispatch_date_idx = col_ac_idx
+                
+                # Map columns by position - Column I is used for both SKU and Product Name
+                df_mapped = pd.DataFrame({
+                    'date-ordered': df.iloc[:, col_a_idx],
+                    'tracking-id': df.iloc[:, col_ae_idx],
+                    'sku': df.iloc[:, col_i_idx],
+                    'qty': df.iloc[:, col_s_idx],
+                    'product-name': df.iloc[:, col_i_idx],  # Use column I for product name too
+                    'pickup-slot': df.iloc[:, dispatch_date_idx]
+                })
+                
+                # Rename to match expected column names
+                df = df_mapped.copy()
+                
+            except Exception as e:
+                file_type = "CSV" if is_csv else "Excel"
+                st.error(f"Error mapping columns: {str(e)}")
+                st.info(f"Please ensure the {file_type} file has the correct column structure:")
+                st.info("Column A (index 0): Ordered On, Column I (index 8): SKU/Product Name, Column S (index 18): Quantity, Column AB/AC (index 27/28): Dispatch by date, Column AE (index 30): Tracking ID")
+                logger.error(f"Column mapping error: {str(e)}")
                 return
 
             # Filter and process data
             try:
-                df = df[required_columns].copy()
-                df = df.dropna(subset=['tracking-id', 'asin'])  # Remove rows with missing critical data
-                df = df.sort_values(by="asin")
+                df = df.dropna(subset=['tracking-id', 'sku'])  # Remove rows with missing critical data
+                df = df.sort_values(by="sku")
                 
                 if df.empty:
                     st.warning("No valid data found in the uploaded file.")
@@ -99,27 +174,24 @@ def easy_ship_report():
 
                 # Clean pickup date with improved regex
                 df['pickup-slot'] = df['pickup-slot'].apply(extract_month_day)
-
-                # Rename quantity column and add highlighting
-                df = df.rename(columns={'quantity-purchased': 'qty'})
                 
                 # Safe quantity conversion
                 df['qty'] = df['qty'].apply(safe_int_conversion)
                 df['highlight'] = df['qty'] > 1
 
-                # Merge clean names using ASIN if mapping exists
-                if not asin_map.empty:
+                # Merge clean names using SKU if mapping exists
+                if not sku_map.empty:
                     try:
-                        df = df.merge(asin_map, left_on='asin', right_on='ASIN', how='left')
+                        df = df.merge(sku_map, left_on='sku', right_on='SKU', how='left')
                         # Use clean name if available, otherwise keep original
                         df['product-name'] = df['clean_product_name'].fillna(df['product-name'])
-                        df.drop(columns=['clean_product_name', 'ASIN'], inplace=True, errors='ignore')
-                        logger.info("Applied ASIN mapping to product names")
+                        df.drop(columns=['clean_product_name', 'SKU'], inplace=True, errors='ignore')
+                        logger.info("Applied SKU mapping to product names")
                     except Exception as e:
-                        logger.warning(f"Could not apply ASIN mapping: {str(e)}")
+                        logger.warning(f"Could not apply SKU mapping: {str(e)}")
 
                 # Detect multi-item orders
-                multi_item_orders, order_stats = detect_multi_item_orders(df, product_id_column='asin')
+                multi_item_orders, order_stats = detect_multi_item_orders(df, product_id_column='sku')
 
                 st.caption(f"{len(df)} orders processed successfully")
                 
@@ -234,12 +306,12 @@ def easy_ship_report():
                         doc = SimpleDocTemplate(
                             buffer, 
                             pagesize=page_size, 
-                            title=f"Easy Ship Report - {total_orders} Orders - {today_str}"
+                            title=f"Flipkart Report - {total_orders} Orders - {today_str}"
                         )
                         elements = []
 
                         # Title and summary
-                        title = f"Easy Ship Report - {total_orders} Orders - {today_str}"
+                        title = f"Flipkart Report - {total_orders} Orders - {today_str}"
                         elements.append(Paragraph(title, title_style))
                         elements.append(Spacer(1, 12))
                         
@@ -267,7 +339,7 @@ def easy_ship_report():
                                     elements.append(Spacer(1, 4))
                                     
                                     # Items table
-                                    table_data = [['Product', 'Qty', 'Pickup Date']]
+                                    table_data = [['Product', 'Qty', 'Dispatch Date']]
                                     for _, item in order_items.iterrows():
                                         table_data.append([
                                             f"✅ {str(item['product-name'])[:50]}",
@@ -308,15 +380,15 @@ def easy_ship_report():
                                     elements.append(Paragraph(f"📦 {str(product_name).upper()}", product_header_style))
                                     elements.append(Spacer(1, 4))
                                     
-                                    table_data = [['Tracking ID', 'Qty', 'Pickup Date']]
+                                    table_data = [['Tracking ID', 'Qty', 'Dispatch Date']]
                                     for _, row in group.iterrows():
                                         table_data.append([
-                                            str(row['tracking-id'])[-12:],  # Last 12 characters
+                                            str(row['tracking-id']),  # Full tracking ID
                                             str(row['qty']),
                                             str(row['pickup-slot'])[:15]
                                         ])
 
-                                    table = Table(table_data, colWidths=[180, 60, 90])
+                                    table = Table(table_data, colWidths=[250, 60, 90])
                                     table.hAlign = 'LEFT'
                                     table.setStyle(TableStyle([
                                         ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
@@ -346,7 +418,7 @@ def easy_ship_report():
                                 elements.append(Paragraph(f"📦 {str(product_name).upper()}", product_header_style))
                                 elements.append(Spacer(1, 4))
                                 
-                                table_data = [['Tracking ID', 'Qty', 'Pickup Date', 'Order Type']]
+                                table_data = [['Tracking ID', 'Qty', 'Dispatch Date', 'Order Type']]
                                 for _, row in group.iterrows():
                                     order_type = "⚠️ MULTI-ITEM" if row['tracking-id'] in multi_item_orders else "✅ Single Item"
                                     
@@ -358,13 +430,13 @@ def easy_ship_report():
                                             order_type += f" - ALSO HAS: {', '.join(other_items[:2])}"
                                     
                                     table_data.append([
-                                        str(row['tracking-id'])[-12:],
+                                        str(row['tracking-id']),  # Full tracking ID
                                         str(row['qty']),
                                         str(row['pickup-slot'])[:15],
                                         order_type[:60]  # Truncate long text
                                     ])
 
-                                table = Table(table_data, colWidths=[100, 40, 80, 180])
+                                table = Table(table_data, colWidths=[200, 40, 80, 180])
                                 table.hAlign = 'LEFT'
                                 table_style = TableStyle([
                                     ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
@@ -390,15 +462,15 @@ def easy_ship_report():
                                 elements.append(Paragraph(f"📦 {str(product_name).upper()}", product_header_style))
                                 elements.append(Spacer(1, 4))
                                 
-                                table_data = [['Tracking ID', 'Qty', 'Pickup Date']]
+                                table_data = [['Tracking ID', 'Qty', 'Dispatch Date']]
                                 for _, row in group.iterrows():
                                     table_data.append([
-                                        str(row['tracking-id'])[-12:],
+                                        str(row['tracking-id']),  # Full tracking ID
                                         str(row['qty']),
                                         str(row['pickup-slot'])[:15]
                                     ])
 
-                                table = Table(table_data, colWidths=[180, 60, 90])
+                                table = Table(table_data, colWidths=[250, 60, 90])
                                 table.hAlign = 'LEFT'
                                 table.setStyle(TableStyle([
                                     ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
@@ -443,7 +515,7 @@ def easy_ship_report():
                             else:
                                 style_suffix = "Standard"
                                 
-                            filename = f"EasyShip_{style_suffix}_{len(df)}_Orders_{date.today().strftime('%Y%m%d')}.pdf"
+                            filename = f"Flipkart_{style_suffix}_{len(df)}_Orders_{date.today().strftime('%Y%m%d')}.pdf"
                             
                             st.download_button(
                                 label="Download Enhanced PDF",
@@ -463,7 +535,7 @@ def easy_ship_report():
                         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
                             # Export main data
                             export_df = df.drop(columns=['highlight'], errors='ignore')
-                            export_df.to_excel(writer, index=False, sheet_name="Easy Ship Orders")
+                            export_df.to_excel(writer, index=False, sheet_name="Flipkart Orders")
                             
                             # Export multi-item orders summary
                             if multi_item_orders:
@@ -476,7 +548,7 @@ def easy_ship_report():
                                         'item_count': len(items_list),
                                         'products': ', '.join(items_list),
                                         'total_qty': order_items['qty'].sum(),
-                                        'pickup_date': order_items['pickup-slot'].iloc[0]
+                                        'dispatch_date': order_items['pickup-slot'].iloc[0]
                                     })
                                 
                                 summary_df = pd.DataFrame(multi_item_summary)
@@ -490,7 +562,7 @@ def easy_ship_report():
                             product_summary.to_excel(writer, index=False, sheet_name="Summary by Product")
                         
                         excel_buffer.seek(0)
-                        filename = f"Easy_Ship_Data_{len(df)}_Orders_{date.today().strftime('%Y%m%d')}.xlsx"
+                        filename = f"Flipkart_Report_Data_{len(df)}_Orders_{date.today().strftime('%Y%m%d')}.xlsx"
                         st.download_button(
                             label="Download Excel",
                             data=excel_buffer,
@@ -509,3 +581,4 @@ def easy_ship_report():
             logger.error(f"Error processing file: {str(e)}")
             st.error(f"❌ Error processing file: {str(e)}")
             st.info("Please ensure the file is a valid Excel file with the correct format.")
+

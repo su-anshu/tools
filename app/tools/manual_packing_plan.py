@@ -5,30 +5,15 @@ from fpdf import FPDF
 from datetime import datetime
 import logging
 from app.sidebar import sidebar_controls, load_master_data, MANUAL_PLAN_FILE
+from app.utils import is_empty_value, setup_tool_ui
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def is_empty_value(value):
-    """Standardized check for empty/invalid values"""
-    if pd.isna(value):
-        return True
-    if value is None:
-        return True
-    str_value = str(value).strip().lower()
-    return str_value in ["", "nan", "none", "null", "n/a"]
-
 def manual_packing_plan():
-    # Inject custom CSS
-    try:
-        from app.utils.ui_components import inject_custom_css
-        inject_custom_css()
-    except Exception:
-        pass
-    
-    # Minimal header
-    st.markdown("### Manual Packing Plan Generator")
+    # Setup UI with CSS
+    setup_tool_ui("Manual Packing Plan Generator")
     sidebar_controls()
 
     def process_uploaded_file(path):

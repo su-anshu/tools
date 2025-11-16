@@ -304,7 +304,7 @@ def amazon_easy_ship_dropdown(group_name: str, children: list, group_key: str) -
     # Parent toggle button - make it clearly visible
     parent_label = f"{group_name} {chevron}"
     
-    if st.button(parent_label, key=f"{group_key}_parent", use_container_width=True, type=parent_button_type):
+    if st.sidebar.button(parent_label, key=f"{group_key}_parent", use_container_width=True, type=parent_button_type):
         st.session_state[expanded_key] = not st.session_state[expanded_key]
         st.rerun()
     
@@ -319,10 +319,153 @@ def amazon_easy_ship_dropdown(group_name: str, children: list, group_key: str) -
             child_style = "primary" if is_child_active else "secondary"
             child_label = f"  → {child}"  # Indent with arrow for visibility
             
-            if st.button(child_label, key=f"{group_key}_{child}", use_container_width=True, type=child_style):
+            if st.sidebar.button(child_label, key=f"{group_key}_{child}", use_container_width=True, type=child_style):
                 selected_child = child_path
                 st.session_state.selected_tool = child_path
                 st.rerun()
     
     return selected_child
+
+# ============================================================================
+# Tailwind CSS Helper Functions for Sidebar
+# ============================================================================
+
+def tailwind_card(content: str, padding: str = "p-4", shadow: str = "shadow-sm", 
+                  bg_color: str = "bg-white", border: str = "border border-gray-200", 
+                  rounded: str = "rounded-lg", margin: str = "mb-4", 
+                  hover: bool = True) -> str:
+    """
+    Generate Tailwind-styled card container
+    
+    Args:
+        content: HTML content to wrap
+        padding: Tailwind padding class (default: p-4)
+        shadow: Tailwind shadow class (default: shadow-sm)
+        bg_color: Tailwind background color class (default: bg-white)
+        border: Tailwind border classes (default: border border-gray-200)
+        rounded: Tailwind rounded class (default: rounded-lg)
+        margin: Tailwind margin class (default: mb-4)
+        hover: Add hover shadow effect (default: True)
+    
+    Returns:
+        HTML string for Tailwind-styled card
+    """
+    hover_class = "hover:shadow-md transition-all duration-200 ease-in-out" if hover else ""
+    return f'<div class="{bg_color} {border} {rounded} {padding} {shadow} {margin} {hover_class}">{content}</div>'
+
+def tailwind_section_header(title: str, icon: str = "", size: str = "text-lg") -> str:
+    """
+    Generate Tailwind-styled section header
+    
+    Args:
+        title: Section title
+        icon: Optional icon emoji or HTML
+        size: Tailwind text size class (default: text-lg)
+    
+    Returns:
+        HTML string for section header
+    """
+    icon_html = f'<span class="mr-2">{icon}</span>' if icon else ""
+    return f'''
+    <div class="mb-4 mt-6">
+        <h3 class="{size} font-semibold text-gray-900 flex items-center">
+            {icon_html}{title}
+        </h3>
+    </div>
+    '''
+
+def tailwind_status_badge(text: str, status: str = "info", size: str = "text-xs") -> str:
+    """
+    Generate Tailwind-styled status badge
+    
+    Args:
+        text: Badge text
+        status: Status type - "success", "warning", "error", "info" (default: info)
+        size: Tailwind text size class (default: text-xs)
+    
+    Returns:
+        HTML string for status badge
+    """
+    status_colors = {
+        "success": "bg-green-100 text-green-800 border-green-200",
+        "warning": "bg-yellow-100 text-yellow-800 border-yellow-200",
+        "error": "bg-red-100 text-red-800 border-red-200",
+        "info": "bg-blue-100 text-blue-800 border-blue-200"
+    }
+    color_class = status_colors.get(status, status_colors["info"])
+    return f'''
+    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full {size} font-medium border {color_class}">
+        {text}
+    </span>
+    '''
+
+def tailwind_input_group(label: str, input_html: str, help_text: str = "") -> str:
+    """
+    Generate Tailwind-styled input group with label
+    
+    Args:
+        label: Input label
+        input_html: HTML for the input field
+        help_text: Optional help text
+    
+    Returns:
+        HTML string for input group
+    """
+    help_html = f'<p class="mt-1 text-xs text-gray-500">{help_text}</p>' if help_text else ""
+    return f'''
+    <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-2">{label}</label>
+        {input_html}
+        {help_html}
+    </div>
+    '''
+
+def tailwind_divider() -> str:
+    """Generate Tailwind-styled divider"""
+    return '<div class="border-t border-gray-200 my-4"></div>'
+
+def tailwind_info_text(text: str, icon: str = "", color: str = "text-gray-600") -> str:
+    """
+    Generate Tailwind-styled info text
+    
+    Args:
+        text: Text content
+        icon: Optional icon
+        color: Tailwind text color class (default: text-gray-600)
+    
+    Returns:
+        HTML string for info text
+    """
+    icon_html = f'<span class="mr-1">{icon}</span>' if icon else ""
+    return f'<p class="text-sm {color} mt-2">{icon_html}{text}</p>'
+
+def tailwind_success_message(text: str) -> str:
+    """Generate Tailwind-styled success message"""
+    return f'''
+    <div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+        <p class="text-sm text-green-800 flex items-center">
+            <span class="mr-2">✅</span>{text}
+        </p>
+    </div>
+    '''
+
+def tailwind_error_message(text: str) -> str:
+    """Generate Tailwind-styled error message"""
+    return f'''
+    <div class="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
+        <p class="text-sm text-red-800 flex items-center">
+            <span class="mr-2">❌</span>{text}
+        </p>
+    </div>
+    '''
+
+def tailwind_warning_message(text: str) -> str:
+    """Generate Tailwind-styled warning message"""
+    return f'''
+    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
+        <p class="text-sm text-yellow-800 flex items-center">
+            <span class="mr-2">⚠️</span>{text}
+        </p>
+    </div>
+    '''
 

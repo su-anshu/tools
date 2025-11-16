@@ -1,76 +1,73 @@
 import streamlit as st
-
 import pandas as pd
-
 from reportlab.pdfgen import canvas
-
 from reportlab.lib.pagesizes import mm
-
 from reportlab.lib.utils import ImageReader
-
 from io import BytesIO
-
 from datetime import datetime
-
 from dateutil.relativedelta import relativedelta
-
 import random
-
 import os
-
 import fitz
-
 from PIL import Image
-
 import re
-
-import contextlib
-
 import logging
-
-from app.sidebar import sidebar_controls, load_master_data, MASTER_FILE, BARCODE_PDF_PATH
-
+from app.sidebar import MASTER_FILE, BARCODE_PDF_PATH
 from app.tools.label_components.ingredients import IngredientsAllergenLabel
-
 from app.tools.label_components.nutritional import NutritionLabel, load_nutrition_data
-
 from app.data_loader import load_nutrition_data_silent
-
-
+from app.utils import is_empty_value, setup_tool_ui, load_and_validate_master_data, sanitize_filename
+from app.pdf_utils import safe_pdf_context
 
 # Setup logging
-
 logging.basicConfig(level=logging.INFO)
-
 logger = logging.getLogger(__name__)
 
-
-
 # --- CONFIG ---
-
 LABEL_WIDTH = 48 * mm
-
 LABEL_HEIGHT = 25 * mm
 
 
-
-# Utility functions
-
-def is_empty_value(value):
-
-    """Standardized check for empty/invalid values"""
-
-    if pd.isna(value):
-
-        return True
-
-    if value is None:
-
-        return True
-
-    str_value = str(value).strip().lower()
-
-    return str_value in ["", "nan", "none", "null", "n/a"]
+def find_allergen_column(nutrition_row):
+    """Find allergen column in nutrition data with flexible matching
+    
+    Tries multiple methods:
+    1. Exact match: "Allergen Info"
+    2. Case-insensitive partial match: contains "allergen"
+    3. Access by position: column D (index 3)
+    
+    Returns the allergen value or empty string if not found
+    """
+    # Method 1: Try exact match
+    if "Allergen Info" in nutrition_row.index:
+        allergen_value = nutrition_row.get("Allergen Info", "")
+        if not is_empty_value(allergen_value):
+            logger.info("Found allergen info using exact match 'Allergen Info'")
+            return str(allergen_value)
+    
+    # Method 2: Try case-insensitive partial match
+    for col in nutrition_row.index:
+        if 'allergen' in str(col).lower():
+            allergen_value = nutrition_row.get(col, "")
+            if not is_empty_value(allergen_value):
+                logger.info(f"Found allergen info using column: {col}")
+                return str(allergen_value)
+    
+    # Method 3: Try accessing by position (column D = index 3)
+    try:
+        if len(nutrition_row.index) > 3:
+            allergen_value = nutrition_row.iloc[3]
+            column_name = nutrition_row.index[3]
+            if not is_empty_value(allergen_value):
+                logger.info(f"Found allergen info using column D (index 3): {column_name}")
+                return str(allergen_value)
+    except (IndexError, KeyError, AttributeError) as e:
+        logger.debug(f"Could not access column D by position: {str(e)}")
+        pass
+    
+    # Log available columns for debugging
+    logger.warning(f"Allergen column not found. Available columns: {list(nutrition_row.index)}")
+    return ""
 
 
 
@@ -200,21 +197,6 @@ def parse_expiry_value(expiry_value, reference_date=None):
 
 
 
-@contextlib.contextmanager
-
-def safe_pdf_context(pdf_bytes):
-
-    """Context manager for safe PDF handling"""
-
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-    try:
-
-        yield doc
-
-    finally:
-
-        doc.close()
 
 
 
@@ -1356,7 +1338,11 @@ def combine_pdfs_to_triple_label(ingredients_pdf, nutrition_pdf, mrp_barcode_buf
 
 def generate_triple_label_combined(master_df, nutrition_row, product_name, method="direct"):
 
-    """Generate 50×100mm triple label using existing components"""
+    """Generate 50×100mm triple label using existing components
+    
+    Note: The method parameter is kept for backward compatibility but is ignored.
+    This function always uses direct barcode generation.
+    """
 
     try:
 
@@ -1364,15 +1350,30 @@ def generate_triple_label_combined(master_df, nutrition_row, product_name, metho
 
         ingredients_gen = IngredientsAllergenLabel()
 
+        # Find allergen info using flexible column detection
+        allergen_info = find_allergen_column(nutrition_row)
+        
+        # Get ingredients - try flexible matching too
+        ingredients = str(nutrition_row.get("Ingredients", ""))
+        if is_empty_value(ingredients):
+            # Try case-insensitive match
+            for col in nutrition_row.index:
+                if 'ingredient' in str(col).lower():
+                    ingredients = str(nutrition_row.get(col, ""))
+                    if not is_empty_value(ingredients):
+                        break
+
         ingredients_data = {
 
             "Product": product_name,
 
-            "Ingredients": str(nutrition_row.get("Ingredients", "")),
+            "Ingredients": ingredients,
 
-            "Allergen Info": str(nutrition_row.get("Allergen Info", ""))
+            "Allergen Info": allergen_info
 
         }
+        
+        logger.info(f"Allergen info for {product_name}: {allergen_info[:50] if allergen_info else 'EMPTY'}...")
 
         ingredients_pdf = ingredients_gen.create_pdf(ingredients_data)
 
@@ -1416,7 +1417,7 @@ def generate_triple_label_combined(master_df, nutrition_row, product_name, metho
 
         
 
-        # 3. MRP+Barcode (choose method)
+        # 3. MRP+Barcode (always use direct generation method)
 
         fnsku = str(master_df.iloc[0].get('FNSKU', '')).strip()
 
@@ -1428,23 +1429,15 @@ def generate_triple_label_combined(master_df, nutrition_row, product_name, metho
 
         
 
-        if method == "direct":
+        # Always use direct generation method (method parameter kept for backward compatibility)
 
-            # Use direct generation method
-
-            mrp_barcode_pdf = generate_combined_label_vertical_pdf_direct(master_df, fnsku)
-
-        else:
-
-            # Use PDF method
-
-            mrp_barcode_pdf = generate_combined_label_vertical_pdf(master_df, fnsku, BARCODE_PDF_PATH)
+        mrp_barcode_pdf = generate_combined_label_vertical_pdf_direct(master_df, fnsku)
 
             
 
         if not mrp_barcode_pdf:
 
-            logger.error(f"Failed to generate MRP+Barcode section using {method} method")
+            logger.error("Failed to generate MRP+Barcode section using direct method")
 
             return None
 
@@ -1693,128 +1686,40 @@ def generate_combined_label_vertical_pdf_direct(mrp_df, fnsku_code):
 # --- Main App Logic ---
 
 def label_generator_tool():
-
-    # Inject custom CSS
-
-    try:
-
-        from app.utils.ui_components import inject_custom_css
-
-        inject_custom_css()
-
-    except Exception:
-
-        pass
-
+    # Setup UI with CSS
+    setup_tool_ui("MRP Label Generator")
     
-
-    # Minimal header
-
-    st.markdown("### MRP Label Generator")
-
+    # Load and validate master data
+    df, admin_logged_in, BARCODE_PDF_PATH = load_and_validate_master_data(
+        require_columns=['Name'], 
+        return_barcode_path=True
+    )
     
-
-    # Header info section - minimal
-
-    st.caption("Generate 48mm x 25mm labels with MRP, batch code, FSSAI & barcode")
-
-    
-
-    admin_logged_in, _, BARCODE_PDF_PATH, _ = sidebar_controls()
-
-
-
-    def sanitize_filename(name):
-
-        """Sanitize filename for safe file operations"""
-
-        return re.sub(r'[^\w\-_\.]', '_', str(name))
-
-
-
-    # Load and validate data from Google Sheets or Excel backup
-
-    df = load_master_data()
-
-    if df is None:
-
-        st.stop()
-
-        return
-
-    
-
     if df.empty:
-
-        st.warning("Master data file is empty")
-
-        return
-
-    
-
-    # Clean column names
-
-    df.columns = df.columns.str.strip()
-
-    logger.info(f"Loaded master data with {len(df)} products")
-
-    
-
-    # Check required columns
-
-    required_columns = ['Name']
-
-    missing_columns = [col for col in required_columns if col not in df.columns]
-
-    if missing_columns:
-
-        st.error(f"Missing required columns in master file: {missing_columns}")
-
+        st.warning("No data available")
         return
 
 
 
     try:
-
-        # Product Selection Section
-
-        st.markdown("**Product Selection**")
-
-        
-
-        # Product selection with error handling
-
-        product_options = []
-
-        if 'Name' in df.columns:
-
-            product_options = sorted(df['Name'].dropna().unique())
-
-        
-
-        if not product_options:
-
-            st.warning("No products found in master file")
-
-            return
-
-        
-
-        # Two column layout for selection
 
         col1, col2 = st.columns(2)
 
-        
-
         with col1:
+
+            product_options = sorted(df['Name'].dropna().unique()) if 'Name' in df.columns else []
+
+            if not product_options:
+
+                st.warning("No products found")
+
+                return
 
             selected_product = st.selectbox("Select Product", product_options, key="product_select")
 
         
 
         with col2:
-
-            # Weight selection
 
             weight_options = []
 
@@ -1824,15 +1729,11 @@ def label_generator_tool():
 
                 weight_options = sorted(product_df['Net Weight'].dropna().unique())
 
-            
-
             if not weight_options:
 
-                st.warning(f"No weight options found for {selected_product}")
+                st.warning("No weight options")
 
                 return
-
-                
 
             selected_weight = st.selectbox("Select Weight", weight_options, key="weight_select")
 
@@ -1850,297 +1751,141 @@ def label_generator_tool():
 
 
 
-        # Product Info Display
-
         if not filtered_df.empty:
-
-            st.markdown("---")
-
-            
-
-            # Product details removed - already available in expandable section below
-
-            
-
-            # Data preview in expandable section
-
-            with st.expander("View Complete Product Data"):
-
-                st.dataframe(filtered_df, use_container_width=True)
-
-
-
-            st.markdown("---")
-
-            
-
-            # Label Generation Section
-
-            st.markdown("**Label Options**")
-
-            
 
             safe_name = sanitize_filename(selected_product)
 
             
 
-            # MRP Only Label
+            # MRP and Barcode Labels
 
-            with st.container():
+            st.markdown("**MRP LABEL**")
 
-                st.markdown("**MRP Label Only**")
+            col1, col2 = st.columns(2)
 
-                col1, col2 = st.columns([3, 1])
+            with col1:
 
-                with col1:
+                try:
 
-                    st.caption("Basic MRP label with batch code and FSSAI")
+                    label_pdf = generate_pdf(filtered_df)
 
-                with col2:
+                    if label_pdf:
+
+                        st.download_button(
+
+                            "Download MRP Label", 
+
+                            data=label_pdf, 
+
+                            file_name=f"{safe_name}_MRP_Label.pdf", 
+
+                            mime="application/pdf",
+
+                            use_container_width=True
+
+                        )
+
+                    else:
+
+                        st.error("Failed to generate")
+
+                except Exception as e:
+
+                    st.error(f"Error: {str(e)}")
+
+            with col2:
+
+                if 'FNSKU' in filtered_df.columns:
 
                     try:
 
-                        label_pdf = generate_pdf(filtered_df)
+                        fnsku_code = str(filtered_df.iloc[0]['FNSKU']).strip()
 
-                        if label_pdf:
+                        if not is_empty_value(fnsku_code):
 
-                            st.download_button(
+                            direct_barcode = generate_fnsku_barcode_direct(fnsku_code)
 
-                                "Download", 
+                            if direct_barcode:
 
-                                data=label_pdf, 
+                                st.download_button(
 
-                                file_name=f"{safe_name}_MRP_Label.pdf", 
+                                    "Download Barcode", 
 
-                                mime="application/pdf",
+                                    data=direct_barcode, 
 
-                                use_container_width=True
+                                    file_name=f"{fnsku_code}_barcode.pdf", 
 
-                            )
+                                    mime="application/pdf",
+
+                                    use_container_width=True
+
+                                )
+
+                            else:
+
+                                st.error("Failed")
 
                         else:
 
-                            st.error("Failed to generate")
+                            st.warning("FNSKU missing")
 
                     except Exception as e:
 
                         st.error(f"Error: {str(e)}")
 
+                else:
 
+                    st.warning("FNSKU not available")
 
-            st.markdown("---")
+            # Sticker Label and House Label section
 
+            col1, col2 = st.columns(2)
 
+            with col1:
 
-            # Barcode and combined label section
+                # Sticker Label section
 
-            if 'FNSKU' in filtered_df.columns and os.path.exists(BARCODE_PDF_PATH):
+                if 'FNSKU' in filtered_df.columns:
 
-                try:
+                    try:
 
-                    fnsku_code = str(filtered_df.iloc[0]['FNSKU']).strip()
+                        fnsku_code = str(filtered_df.iloc[0]['FNSKU']).strip()
 
-                    
+                        if not is_empty_value(fnsku_code):
 
-                    if not is_empty_value(fnsku_code):
+                            st.markdown("**Sticker Label**")
 
-                        
+                            direct_combined_h = generate_combined_label_pdf_direct(filtered_df, fnsku_code)
 
-                        # Combined Labels Section
+                            if direct_combined_h:
 
-                        st.markdown("**Combined MRP + Barcode Labels**")
+                                st.download_button(
 
-                        
+                                    "Download Combined Label", 
 
-                        # Create tabs for different methods
+                                    data=direct_combined_h, 
 
-                        tab1, tab2 = st.tabs(["PDF Method (Default)", "Direct Generation"])
+                                    file_name=f"{safe_name}_Horizontal.pdf", 
 
-                        
+                                    mime="application/pdf",
 
-                        with tab1:
+                                    use_container_width=True
 
-                            st.caption("✅ Uses existing barcode PDF file from sidebar")
-
-                            
-
-                            # Extract barcode
-
-                            barcode = extract_fnsku_page(fnsku_code, BARCODE_PDF_PATH)
-
-                            if barcode:
-
-                                col1, col2 = st.columns(2)  # Changed from 3 to 2 columns
-
-                                
-
-                                with col1:
-
-                                    st.markdown("**Barcode Only**")
-
-                                    st.download_button(
-
-                                        "Download", 
-
-                                        data=barcode, 
-
-                                        file_name=f"{fnsku_code}_barcode_pdf.pdf", 
-
-                                        mime="application/pdf",
-
-                                        use_container_width=True
-
-                                    )
-
-                                
-
-                                with col2:
-
-                                    st.markdown("**Horizontal (96×25mm)**")
-
-                                    combined = generate_combined_label_pdf(filtered_df, fnsku_code, BARCODE_PDF_PATH)
-
-                                    if combined:
-
-                                        st.download_button(
-
-                                            "Download", 
-
-                                            data=combined, 
-
-                                            file_name=f"{safe_name}_Horizontal_PDF.pdf", 
-
-                                            mime="application/pdf",
-
-                                            use_container_width=True
-
-                                        )
-
-                                    else:
-
-                                        st.error("Generation failed")
+                                )
 
                             else:
 
-                                st.warning(f"FNSKU {fnsku_code} not found in barcode PDF")
+                                st.error("Failed")
 
-                        
+                    except Exception as e:
 
-                        with tab2:
+                        st.error(f"Error: {str(e)}")
 
-                            st.caption("Amazon-compliant Code 128A barcodes generated directly")
+            with col2:
 
-                            
-
-                            col1, col2 = st.columns(2)  # Changed from 3 to 2 columns
-
-                            
-
-                            # Direct barcode only
-
-                            with col1:
-
-                                st.markdown("**Barcode Only**")
-
-                                direct_barcode = generate_fnsku_barcode_direct(fnsku_code)
-
-                                if direct_barcode:
-
-                                    st.download_button(
-
-                                        "Download", 
-
-                                        data=direct_barcode, 
-
-                                        file_name=f"{fnsku_code}_barcode.pdf", 
-
-                                        mime="application/pdf",
-
-                                        use_container_width=True
-
-                                    )
-
-                                else:
-
-                                    st.error("Generation failed")
-
-                            
-
-                            # Direct horizontal combined
-
-                            with col2:
-
-                                st.markdown("**Horizontal (96×25mm)**")
-
-                                direct_combined_h = generate_combined_label_pdf_direct(filtered_df, fnsku_code)
-
-                                if direct_combined_h:
-
-                                    st.download_button(
-
-                                        "Download", 
-
-                                        data=direct_combined_h, 
-
-                                        file_name=f"{safe_name}_Horizontal.pdf", 
-
-                                        mime="application/pdf",
-
-                                        use_container_width=True
-
-                                    )
-
-                                else:
-
-                                    st.error("Generation failed")
-
-                        
-
-                        st.markdown("---")
-
-                    else:
-
-                        st.warning("FNSKU is missing for this product.")
-
-                except Exception as e:
-
-                    st.error(f"Error processing barcode: {str(e)}")
-
-            else:
-
-                st.info("Barcode labels unavailable")
-
-                if 'FNSKU' not in filtered_df.columns:
-
-                    st.caption("• FNSKU column not found in master data")
-
-                elif not os.path.exists(BARCODE_PDF_PATH):
-
-                    st.caption("• Barcode PDF not uploaded via sidebar")
-
-                else:
-
-                    st.caption("• FNSKU missing or barcode PDF not available")
-
-
-
-            st.markdown("---")
-
-            
-
-            # Triple Label Generator Section
-
-            with st.container():
-
-                st.markdown("**Triple Label Generator (50×100mm)**")
-
-                st.caption("Combines Ingredients + Nutrition + MRP+Barcode into one comprehensive label")
-
-                
+                # House Label section
 
                 try:
-
-                    # Load nutrition data silently in background
 
                     with st.spinner("Loading nutrition data..."):
 
@@ -2156,13 +1901,7 @@ def label_generator_tool():
 
                         if nutrition_match.empty:
 
-                            st.warning(f"⚠️ Nutrition data not found for '{selected_product}'")
-
-                            with st.expander("📋 View available products"):
-
-                                available_products = sorted(nutrition_df['Product'].dropna().unique())
-
-                                st.write(", ".join(available_products))
+                            st.warning("Nutrition data not found")
 
                         else:
 
@@ -2170,177 +1909,49 @@ def label_generator_tool():
 
                             
 
-                            # Status display in cards
+                            st.markdown("**House Label**")
 
-                            col1, col2, col3 = st.columns(3)
+                            # Generate PDF and show single download button
 
-                            with col1:
+                            with st.spinner("Generating..."):
 
-                                st.success("✅ Master Data")
+                                triple_pdf = generate_triple_label_combined(
 
-                                st.caption("Product & weight found")
+                                    filtered_df, 
 
-                            with col2:
+                                    nutrition_row, 
 
-                                st.success("✅ Nutrition Data") 
+                                    selected_product
 
-                                st.caption("Ingredients & facts available")
-
-                            with col3:
-
-                                fnsku_available = not is_empty_value(str(filtered_df.iloc[0].get('FNSKU', '')))
-
-                                if fnsku_available:
-
-                                    st.success("✅ FNSKU Available")
-
-                                    st.caption("Barcode ready")
-
-                                else:
-
-                                    st.warning("⚠️ FNSKU Missing")
-
-                                    st.caption("No barcode available")
-
-                            
-
-                            # Generation tabs
-
-                            tab1, tab2 = st.tabs(["PDF Method (Default)", "Direct Generation"])
-
-                            
-
-                            with tab1:
-
-                                st.caption("✅ Uses existing barcode PDF file from sidebar")
+                                )
 
                                 
 
-                                if os.path.exists(BARCODE_PDF_PATH):
+                                if triple_pdf:
 
-                                    col1, col2 = st.columns([2, 1])
+                                    st.download_button(
 
-                                    with col1:
+                                        "Download Triple Label", 
 
-                                        st.markdown("**Label Composition:**")
+                                        data=triple_pdf, 
 
-                                        st.write("Ingredients & Allergens (22mm)")
+                                        file_name=f"{safe_name}_{selected_weight}_Triple.pdf", 
 
-                                        st.write("Nutritional Facts (35mm)")
+                                        mime="application/pdf",
 
-                                        st.write("MRP + Barcode (37mm)")
+                                        use_container_width=True,
 
-                                    
+                                        key="download_triple"
 
-                                    with col2:
-
-                                        if st.button("Generate Triple Label", key="pdf_triple", use_container_width=True):
-
-                                            with st.spinner("Generating (PDF)..."):
-
-                                                triple_pdf = generate_triple_label_combined(
-
-                                                    filtered_df, 
-
-                                                    nutrition_row, 
-
-                                                    selected_product,
-
-                                                    method="pdf"
-
-                                                )
-
-                                                
-
-                                                if triple_pdf:
-
-                                                    st.caption("Ready")
-
-                                                    st.download_button(
-
-                                                        "Download Triple Label", 
-
-                                                        data=triple_pdf, 
-
-                                                        file_name=f"{safe_name}_{selected_weight}_Triple_PDF.pdf", 
-
-                                                        mime="application/pdf",
-
-                                                        use_container_width=True,
-
-                                                        key="download_pdf_triple"
-
-                                                    )
-
-                                                else:
-
-                                                    st.error("Generation failed")
+                                    )
 
                                 else:
 
-                                    st.warning("Barcode PDF not available")
-
-                                    st.caption("Please upload barcode PDF via sidebar to use this method")
-
-                            
-
-                            with tab2:
-
-                                st.caption("Amazon-compliant Code 128A barcodes generated directly")
-
-                                
-
-                                # Generate button centered
-
-                                if st.button("Generate Triple Label", key="direct_triple", use_container_width=True):
-
-                                    with st.spinner("Generating (Direct)..."):
-
-                                        triple_pdf = generate_triple_label_combined(
-
-                                            filtered_df, 
-
-                                            nutrition_row, 
-
-                                            selected_product,
-
-                                            method="direct"
-
-                                        )
-
-                                        
-
-                                        if triple_pdf:
-
-                                            st.caption("Ready")
-
-                                            st.download_button(
-
-                                                "Download Triple Label", 
-
-                                                data=triple_pdf, 
-
-                                                file_name=f"{safe_name}_{selected_weight}_Triple_Direct.pdf", 
-
-                                                mime="application/pdf",
-
-                                                use_container_width=True,
-
-                                                key="download_direct_triple"
-
-                                            )
-
-                                        else:
-
-                                            st.error("Generation failed")
+                                    st.error("Failed")
 
                     else:
 
                         st.error("Could not load nutrition data")
-
-                        st.caption("Check internet connection")
-
-                        
 
                 except Exception as e:
 
@@ -2350,7 +1961,7 @@ def label_generator_tool():
 
         else:
 
-            st.warning("No matching data found for selected product and weight.")
+            st.warning("No matching data found")
 
             
 
