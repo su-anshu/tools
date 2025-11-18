@@ -1525,6 +1525,10 @@ def flipkart_packing_plan_tool():
         file_count = len(pdf_files)
         st.caption(f"{file_count} files • {total_size_mb:.2f} MB total")
     
+    # Initialize total_invoice_count and invoice_has_multi_qty at function scope level
+    total_invoice_count = 0
+    invoice_has_multi_qty = []
+    
     if pdf_files:
         logger.info(f"Processing {len(pdf_files)} Flipkart PDF files")
         
@@ -1539,14 +1543,45 @@ def flipkart_packing_plan_tool():
         
         total_files = len(pdf_files)
         for file_idx, uploaded_file in enumerate(pdf_files):
-            progress = (file_idx + 1) / total_files
+            progress = (file_idx + 1) / (total_files * 2)  # Half progress for first pass
             progress_bar.progress(progress)
             status_text.text(f"📄 Processing file {file_idx + 1}/{total_files}: {uploaded_file.name}")
             
             try:
                 pdf_bytes = uploaded_file.read()
                 all_pdf_bytes.append(pdf_bytes)  # Store for sorting
+                
+                # First pass: Count invoices and track multi-qty invoices
+                import fitz
+                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                for page_idx, page in enumerate(doc):
+                    page_text = page.get_text()
+                    page_text_upper = page_text.upper()
+                    # Check if this page is an invoice page (has invoice table headers)
+                    is_invoice_page = "SKU ID" in page_text_upper and "QTY" in page_text_upper
+                    
+                    if is_invoice_page:
+                        total_invoice_count += 1
+                        # Track if this invoice has any items with qty > 1
+                        invoice_has_multi = False
+                        
+                        # Extract products from this page to check quantities
+                        products = extract_product_from_shipping_label(page_text)
+                        for product in products:
+                            qty = product.get('qty', 1)
+                            if qty > 1:
+                                invoice_has_multi = True
+                                break
+                        
+                        invoice_has_multi_qty.append(invoice_has_multi)
+                doc.close()
+                
+                # Second pass: Extract product info
                 result = extract_product_info_flipkart(pdf_bytes)
+                logger.info(f"Extracted {len(result.get('products', []))} products from {uploaded_file.name}")
+                
+                if not result.get('products'):
+                    logger.warning(f"No products extracted from {uploaded_file.name} - this may indicate a parsing issue")
                 
                 # Aggregate products by product_name + weight (same as ASIN for Amazon)
                 for product in result['products']:
@@ -1952,7 +1987,7 @@ def flipkart_packing_plan_tool():
             # Generate summary PDF
             summary_pdf = None
             try:
-                summary_pdf = generate_summary_pdf_flipkart(df_orders, df_physical, missing_products)
+                summary_pdf = generate_summary_pdf_flipkart(df_orders, df_physical, missing_products, total_invoice_count, invoice_has_multi_qty)
             except Exception as e:
                 st.error(f"Error generating PDF: {str(e)}")
             
@@ -2320,6 +2355,7 @@ def expand_to_physical_flipkart(df, master_df):
                 })
                 physical_rows.append({
                     "item": f"UNKNOWN PRODUCT ({product_name} {weight})",
+                    "item_name_for_labels": f"UNKNOWN PRODUCT ({product_name} {weight})",  # Same as item for unknown products
                     "weight": weight or "N/A",
                     "Qty": qty,
                     "Packet Size": "N/A",
@@ -2330,7 +2366,8 @@ def expand_to_physical_flipkart(df, master_df):
                     "FSSAI": "N/A",
                     "Packed Today": "",
                     "Available": "",
-                    "Status": "⚠️ MISSING FROM MASTER"
+                    "Status": "⚠️ MISSING FROM MASTER",
+                    "is_split": False  # Not a split product
                 })
                 continue
             
@@ -2347,6 +2384,44 @@ def expand_to_physical_flipkart(df, master_df):
             fnsku = str(base.get(fnsku_col, "")) if fnsku_col else ""
             asin = str(base.get(asin_col, "")) if asin_col else ""
             
+            # Extract weight with robust handling for different types (int, float, string, NaN) - similar to Amazon
+            # Try multiple ways to access the column to handle variations in column names
+            base_weight_raw = None
+            try:
+                # Method 1: Try direct access (most reliable if column exists)
+                net_weight_col_base = find_column_flexible(matches, ['Net Weight', 'NetWeight'])
+                if net_weight_col_base and net_weight_col_base in base.index:
+                    base_weight_raw = base[net_weight_col_base]
+                else:
+                    # Method 2: Try .get() with variations
+                    base_weight_raw = base.get(net_weight_col_base) if net_weight_col_base else None
+            except (KeyError, AttributeError) as e:
+                logger.debug(f"Error accessing Net Weight column directly: {e}")
+                # Method 3: Fallback to .get() with default
+                net_weight_col_base = find_column_flexible(matches, ['Net Weight', 'NetWeight'])
+                base_weight_raw = base.get(net_weight_col_base, "") if net_weight_col_base else ""
+            
+            # Convert weight to string format, handling different types
+            base_weight = ""
+            if base_weight_raw is not None and not pd.isna(base_weight_raw):
+                # Handle numeric types (int/float) and string types
+                if isinstance(base_weight_raw, (int, float)):
+                    # Convert numeric to string (e.g., 1 -> "1", 0.7 -> "0.7")
+                    base_weight = str(base_weight_raw).strip()
+                else:
+                    # Handle string types
+                    base_weight = str(base_weight_raw).strip()
+            
+            # Construct original product name with weight for split products (for PDF display)
+            # Example: "Coconut Thekua" + "0.7kg" = "Coconut Thekua 0.7"
+            original_name_with_weight = name
+            if base_weight and not is_empty_value(base_weight):
+                # Normalize weight: remove "kg" suffix if present for cleaner display
+                # Handles: "0.7kg" -> "0.7", "1kg" -> "1", "0.7" -> "0.7", "1" -> "1"
+                weight_display = base_weight.replace("kg", "").strip() if base_weight.lower().endswith("kg") else base_weight
+                original_name_with_weight = f"{name} {weight_display}"
+                logger.debug(f"✓ Added weight to split product name: '{name}' -> '{original_name_with_weight}' (weight_display: '{weight_display}')")
+            
             # Check if FNSKU is missing
             if is_empty_value(fnsku):
                 missing_products.append({
@@ -2359,22 +2434,29 @@ def expand_to_physical_flipkart(df, master_df):
             
             # Handle products with split information
             if split and not is_empty_value(split):
-                sizes = [s.strip() for s in split.split(",")]
+                # Normalize split sizes: remove "kg" suffix (like Amazon version)
+                sizes = [s.strip().replace("kg", "").strip() for s in split.split(",")]
+                # Calculate split quantity multiplier: number of pieces the product splits into
+                split_qty_multiplier = len(sizes)
+                # Multiply original quantity by number of split pieces
+                final_qty = qty * split_qty_multiplier
                 split_found = False
+                logger.info(f"Processing split for {name}: split={split}, normalized_sizes={sizes}, original_qty={qty}, split_pieces={split_qty_multiplier}, final_qty={final_qty}")
                 
                 for size in sizes:
                     try:
-                        # Use weight matching function that handles kg/g conversions
+                        logger.debug(f"Trying to match split size: {size} for product {name}")
                         # Match by name and weight using flexible column matching
                         name_col_master = find_column_flexible(master_df, ['Name'])
                         net_weight_col_master = find_column_flexible(master_df, ['Net Weight', 'NetWeight'])
                         
                         if name_col_master and net_weight_col_master:
-                            # Use weights_match for flexible weight comparison
-                            # This handles: "0.35" matches "350g", "0.7" matches "700g", etc.
+                            # Use direct string matching after normalization (like Amazon version)
+                            # Normalize master_df Net Weight values: remove "kg", strip, then match
+                            # This ensures consistent matching regardless of format (0.5, 0.5kg, 500g, etc.)
                             sub_matches = master_df[
-                                (master_df[name_col_master].str.contains(name, case=False, na=False)) &
-                                (master_df[net_weight_col_master].apply(lambda w: weights_match(w, size)))
+                                (master_df[name_col_master].str.strip().str.lower() == name.strip().lower()) &
+                                (master_df[net_weight_col_master].astype(str).str.replace("kg", "").str.strip() == size)
                             ]
                             
                             if not sub_matches.empty:
@@ -2389,11 +2471,15 @@ def expand_to_physical_flipkart(df, master_df):
                                 
                                 sub_fnsku = str(sub.get(sub_fnsku_col, "")) if sub_fnsku_col else ""
                                 status = "✅ READY" if not is_empty_value(sub_fnsku) else "⚠️ MISSING FNSKU"
+                                split_weight = sub.get(net_weight_col_master, "N/A")
+                                
+                                logger.info(f"✓ Found split variant: {name} -> size={size}, weight={split_weight}, qty={final_qty} (original={qty} × {split_qty_multiplier} pieces), FNSKU={sub_fnsku}")
                                 
                                 physical_rows.append({
-                                    "item": name,
-                                    "weight": sub.get(net_weight_col_master, "N/A"),
-                                    "Qty": qty,
+                                    "item": original_name_with_weight,  # Original name with weight (e.g., "Coconut Thekua 0.7") - for PDF display
+                                    "item_name_for_labels": name,  # Original name without weight (e.g., "Coconut Thekua") - for labels
+                                    "weight": split_weight,
+                                    "Qty": final_qty,
                                     "Packet Size": sub.get(packet_size_col, "N/A") if packet_size_col else "N/A",
                                     "Packet used": sub.get(packet_used_col, "N/A") if packet_used_col else "N/A",
                                     "ASIN": sub.get(asin_col_sub, asin) if asin_col_sub else asin,
@@ -2402,17 +2488,21 @@ def expand_to_physical_flipkart(df, master_df):
                                     "FSSAI": sub.get(fssai_col, "N/A") if fssai_col else "N/A",
                                     "Packed Today": "",
                                     "Available": "",
-                                    "Status": status
+                                    "Status": status,
+                                    "is_split": True  # Mark as split product
                                 })
                                 split_found = True
                                 break  # Found the split variant, no need to continue
+                            else:
+                                logger.warning(f"✗ Split variant {size} not found for {name} (tried exact name match)")
                     except (ValueError, KeyError, AttributeError) as e:
                         error_type = type(e).__name__
-                        logger.error(f"Error processing split variant for {name}: {error_type} - {str(e)}")
+                        logger.error(f"Error processing split variant {size} for {name}: {error_type} - {str(e)}")
                     except Exception as e:
-                        logger.error(f"Unexpected error processing split variant for {name}: {str(e)}")
+                        logger.error(f"Unexpected error processing split variant {size} for {name}: {str(e)}")
                 
                 if not split_found:
+                    logger.warning(f"✗ No split variants found for {name} with split sizes: {sizes}")
                     missing_products.append({
                         "SKU_ID": sku_id,
                         "Product": product_name,
@@ -2434,6 +2524,7 @@ def expand_to_physical_flipkart(df, master_df):
                 
                 physical_rows.append({
                     "item": name,
+                    "item_name_for_labels": name,  # Same as item for non-split products
                     "weight": base.get(net_weight_col_base, weight or "N/A") if net_weight_col_base else (weight or "N/A"),
                     "Qty": qty,
                     "Packet Size": base.get(packet_size_col_base, "N/A") if packet_size_col_base else "N/A",
@@ -2444,7 +2535,8 @@ def expand_to_physical_flipkart(df, master_df):
                     "FSSAI": base.get(fssai_col_base, "N/A") if fssai_col_base else "N/A",
                     "Packed Today": "",
                     "Available": "",
-                    "Status": status
+                    "Status": status,
+                    "is_split": False  # Not a split product
                 })
         except (ValueError, KeyError) as e:
             error_type = type(e).__name__
@@ -2463,8 +2555,9 @@ def expand_to_physical_flipkart(df, master_df):
     if not df_physical.empty:
         try:
             # Group by all columns except Qty to sum quantities for identical items
+            # Include is_split and item_name_for_labels in groupby to preserve split marking and label names
             df_physical = df_physical.groupby(
-                ["item", "weight", "Packet Size", "Packet used", "ASIN", "MRP", "FNSKU", "FSSAI", "Packed Today", "Available", "Status"],
+                ["item", "item_name_for_labels", "weight", "Packet Size", "Packet used", "ASIN", "MRP", "FNSKU", "FSSAI", "Packed Today", "Available", "Status", "is_split"],
                 as_index=False
             ).agg({"Qty": "sum"})
         except Exception as e:
@@ -2474,11 +2567,32 @@ def expand_to_physical_flipkart(df, master_df):
     
     return df_physical, missing_products
 
-def generate_summary_pdf_flipkart(original_df, physical_df, missing_products=None):
+def generate_summary_pdf_flipkart(original_df, physical_df, missing_products=None, total_invoices=0, invoice_has_multi_qty=None):
     """Generate PDF summary with proper encoding handling for Flipkart"""
     try:
         pdf = FPDF()
         timestamp = datetime.now().strftime("%d %b %Y, %I:%M %p")
+
+        def calculate_statistics(original_df, physical_df, missing_products=None, total_invoices=0, invoice_has_multi_qty=None):
+            """Calculate summary statistics for the packing plan"""
+            stats = {}
+            # Total invoices
+            stats['total_invoices'] = total_invoices
+            # Multi qty invoices (customers who ordered items with qty > 1)
+            if invoice_has_multi_qty:
+                stats['multi_qty_invoices'] = sum(1 for has_multi in invoice_has_multi_qty if has_multi)
+            else:
+                stats['multi_qty_invoices'] = 0
+            # Single item invoices (customers who ordered only single items)
+            if invoice_has_multi_qty:
+                stats['single_item_invoices'] = sum(1 for has_multi in invoice_has_multi_qty if not has_multi)
+            else:
+                stats['single_item_invoices'] = 0
+            # Total quantity ordered
+            stats['total_qty_ordered'] = int(original_df['Qty'].sum()) if not original_df.empty and 'Qty' in original_df.columns else 0
+            # Total quantity physical
+            stats['total_qty_physical'] = int(physical_df['Qty'].sum()) if not physical_df.empty and 'Qty' in physical_df.columns else 0
+            return stats
 
         def clean_text(text):
             """Clean text for PDF generation"""
@@ -2500,14 +2614,16 @@ def generate_summary_pdf_flipkart(original_df, physical_df, missing_products=Non
 
         def add_table(df, title, include_tracking=False, hide_sku=False):
             """Add table to PDF"""
-            pdf.set_font("Arial", "B", 12)
-            pdf.cell(0, 10, clean_text(title), 0, 1, "C")
-            pdf.set_font("Arial", "", 10)
-            pdf.cell(0, 8, f"Generated on: {timestamp}", 0, 1, "C")
-            pdf.ln(2)
+            # Only add title and timestamp if title is provided
+            if title:
+                pdf.set_font("Arial", "B", 12)
+                pdf.cell(0, 10, clean_text(title), 0, 1, "C")
+                pdf.set_font("Arial", "", 10)
+                pdf.cell(0, 8, f"Generated on: {timestamp}", 0, 1, "C")
+                pdf.ln(2)
 
-            headers = ["Item", "Weight", "Qty", "Packet Size"]
-            col_widths = [50, 25, 20, 35]
+            headers = ["S.N.", "Item", "Weight", "Qty", "Packet Size"]
+            col_widths = [15, 50, 25, 20, 25]  # Reduced Packet Size from 35 to 25 for more white space
 
             if not hide_sku:
                 headers.append("SKU ID")
@@ -2525,13 +2641,16 @@ def generate_summary_pdf_flipkart(original_df, physical_df, missing_products=Non
             pdf.ln()
 
             pdf.set_font("Arial", "", 10)
-            for _, row in df.iterrows():
+            for idx, (_, row) in enumerate(df.iterrows(), start=1):
                 pdf.set_x(margin_x)
                 # Support both "Item" (original) and "item" (physical) column names
                 item_value = row.get("Item", row.get("item", ""))
                 weight_value = row.get("Weight", row.get("weight", ""))
+                is_split = row.get("is_split", False) if "is_split" in row.index else False
+                
                 values = [
-                    clean_text(str(item_value))[:20],
+                    str(idx),  # Serial number
+                    clean_text(str(item_value))[:20],  # Item name (split variants show full name like "Coconut Thekua 0.7")
                     clean_text(str(weight_value)),
                     str(row.get("Qty", 0)),
                     clean_text(str(row.get("Packet Size", "")))[:15]
@@ -2545,15 +2664,40 @@ def generate_summary_pdf_flipkart(original_df, physical_df, missing_products=Non
                         clean_text(str(row.get("Packed Today", ""))),
                         clean_text(str(row.get("Available", "")))
                     ]
-                    
-                for val, width in zip(values, col_widths):
-                    pdf.cell(width, 10, str(val)[:width//2], 1)  # Truncate to fit
+                
+                # Display values - make item name bold if it's a split product
+                for col_idx, (val, width) in enumerate(zip(values, col_widths)):
+                    # If this is the item column (index 1) and it's a split product, use bold
+                    if col_idx == 1 and is_split:
+                        pdf.set_font("Arial", "B", 10)  # Bold for split items
+                        pdf.cell(width, 10, str(val)[:width//2], 1)  # Truncate to fit
+                        pdf.set_font("Arial", "", 10)  # Reset to regular font
+                    else:
+                        pdf.cell(width, 10, str(val)[:width//2], 1)  # Truncate to fit
                 pdf.ln()
 
         pdf.add_page()
-        add_table(original_df, "Original Ordered Items (from Flipkart Invoice)", hide_sku=False)
+        # Main heading
+        pdf.set_font("Arial", "B", 18)
+        pdf.cell(0, 15, "Flipkart Actual Packing Plan", 0, 1, "C")
+        pdf.set_font("Arial", "", 10)
+        pdf.cell(0, 8, f"Generated on: {timestamp}", 0, 1, "C")
+        pdf.ln(3)
+        
+        # Calculate and display statistics
+        stats = calculate_statistics(original_df, physical_df, missing_products, total_invoices, invoice_has_multi_qty)
+        
+        # Statistics section - center aligned and semi-bold, all in one line
+        pdf.set_font("Arial", "B", 10)  # Semi-bold (B = bold, size 10)
+        stat_col_width = 70
+        stat_start_x = (210 - (stat_col_width * 3)) / 2
+        pdf.set_x(stat_start_x)
+        pdf.cell(stat_col_width, 8, f"Total Invoices: {stats['total_invoices']}", 0, 0, "C")
+        pdf.cell(stat_col_width, 8, f"Total Qty Ordered: {stats['total_qty_ordered']}", 0, 0, "C")
+        pdf.cell(stat_col_width, 8, f"Total Qty Physical: {stats['total_qty_physical']}", 0, 1, "C")
+        
         pdf.ln(5)
-        add_table(physical_df, "Actual Physical Packing Plan", include_tracking=True, hide_sku=True)
+        add_table(physical_df, "", include_tracking=True, hide_sku=True)
         
         # Fixed PDF output handling
         output_buffer = BytesIO()
@@ -2627,7 +2771,8 @@ def generate_labels_by_packet_used_flipkart(df_physical, master_df, nutrition_df
     for _, row in sticker_products.iterrows():
         fnsku = str(row.get('FNSKU', '')).strip()
         qty = int(row.get('Qty', 0))
-        product_name = str(row.get("item", "")).strip()
+        # Use item_name_for_labels for labels (original name without weight), fallback to item
+        product_name = str(row.get("item_name_for_labels", row.get("item", ""))).strip()
         
         if fnsku and fnsku != "MISSING" and not is_empty_value(fnsku):
             for _ in range(qty):
@@ -2652,7 +2797,8 @@ def generate_labels_by_packet_used_flipkart(df_physical, master_df, nutrition_df
     for _, row in house_products.iterrows():
         fnsku = str(row.get('FNSKU', '')).strip()
         qty = int(row.get('Qty', 0))
-        product_name = str(row.get("item", "")).strip()
+        # Use item_name_for_labels for labels (original name without weight), fallback to item
+        product_name = str(row.get("item_name_for_labels", row.get("item", ""))).strip()
         
         if fnsku and fnsku != "MISSING" and not is_empty_value(fnsku):
             # Find nutrition data

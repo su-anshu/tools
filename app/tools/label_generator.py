@@ -425,8 +425,8 @@ def generate_pdf(dataframe):
         for _, row in dataframe.iterrows():
 
             # Safe data extraction
-
-            name = str(row.get('Name') or row.get('item', 'Unknown Product'))
+            # Use item_name_for_labels for labels (original name without weight), fallback to Name, then item
+            name = str(row.get('item_name_for_labels') or row.get('Name') or row.get('item', 'Unknown Product'))
 
             weight = str(row.get('Net Weight') or row.get('weight', 'N/A'))
 

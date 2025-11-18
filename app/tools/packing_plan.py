@@ -401,8 +401,8 @@ def highlight_invoice_page(page):
 
 def sort_pdf_by_asin(pdf_bytes, master_df=None, asin_lookup_dict=None):
     """
-    Sort PDF pages by ASIN (primary) and Product Name (secondary)
-    while keeping customer pairs (2 pages) together
+    Highlight PDF pages while keeping customer pairs (2 pages) together in original order.
+    Sorting logic is commented out but preserved for future use.
     
     Args:
         pdf_bytes: Original PDF bytes
@@ -410,7 +410,7 @@ def sort_pdf_by_asin(pdf_bytes, master_df=None, asin_lookup_dict=None):
         asin_lookup_dict: O(1) lookup dictionary for ASIN to Name (Phase 1 optimization)
     
     Returns:
-        BytesIO buffer with sorted and highlighted PDF, or None if error
+        BytesIO buffer with highlighted PDF (in original order), or None if error
     """
     try:
         with safe_pdf_context(pdf_bytes) as doc:
@@ -420,11 +420,12 @@ def sort_pdf_by_asin(pdf_bytes, master_df=None, asin_lookup_dict=None):
                 logger.warning("Empty PDF provided")
                 return None
             
-            # Phase 1: Use lookup dictionary if available, fallback to function
-            if asin_lookup_dict is None and master_df is not None:
-                asin_lookup_dict = create_asin_lookup_dict(master_df)
+            # FUTURE USE: Phase 1: Use lookup dictionary if available, fallback to function
+            # Commented out for now since we're not sorting, but preserved for future sorting functionality
+            # if asin_lookup_dict is None and master_df is not None:
+            #     asin_lookup_dict = create_asin_lookup_dict(master_df)
             
-            # Group pages in pairs (2 pages per customer)
+            # Group pages in pairs (2 pages per customer) - keep in original order
             customer_pairs = []
             for i in range(0, total_pages, 2):
                 if i + 1 < total_pages:
@@ -432,22 +433,22 @@ def sort_pdf_by_asin(pdf_bytes, master_df=None, asin_lookup_dict=None):
                     shipping_page_idx = i
                     invoice_page_idx = i + 1
                     
-                    # Extract ASIN from invoice page
-                    invoice_page = doc[invoice_page_idx]
-                    invoice_text = invoice_page.get_text()
-                    asin = extract_asin_from_page(invoice_text)
-                    
-                    # Phase 1: Use O(1) dictionary lookup instead of DataFrame search
-                    if asin and asin_lookup_dict:
-                        product_name = asin_lookup_dict.get(asin, "Unknown")
-                    elif asin:
-                        product_name = get_product_name_from_asin(asin, master_df)
-                    else:
-                        product_name = "Unknown"
+                    # FUTURE USE: Extract ASIN from invoice page (commented out for future sorting)
+                    # invoice_page = doc[invoice_page_idx]
+                    # invoice_text = invoice_page.get_text()
+                    # asin = extract_asin_from_page(invoice_text)
+                    # 
+                    # # Phase 1: Use O(1) dictionary lookup instead of DataFrame search
+                    # if asin and asin_lookup_dict:
+                    #     product_name = asin_lookup_dict.get(asin, "Unknown")
+                    # elif asin:
+                    #     product_name = get_product_name_from_asin(asin, master_df)
+                    # else:
+                    #     product_name = "Unknown"
                     
                     customer_pairs.append({
-                        'asin': asin if asin else "ZZZ_NO_ASIN",  # Put no-ASIN at end
-                        'product_name': product_name,
+                        # 'asin': asin if asin else "ZZZ_NO_ASIN",  # Put no-ASIN at end
+                        # 'product_name': product_name,
                         'shipping_page_idx': shipping_page_idx,
                         'invoice_page_idx': invoice_page_idx,
                         'original_pair_num': len(customer_pairs) + 1
@@ -455,31 +456,32 @@ def sort_pdf_by_asin(pdf_bytes, master_df=None, asin_lookup_dict=None):
                 elif i < total_pages:
                     # Odd number of pages - last page alone
                     single_page_idx = i
-                    single_page = doc[single_page_idx]
-                    page_text = single_page.get_text()
-                    asin = extract_asin_from_page(page_text)
-                    
-                    # Phase 1: Use O(1) dictionary lookup instead of DataFrame search
-                    if asin and asin_lookup_dict:
-                        product_name = asin_lookup_dict.get(asin, "Unknown")
-                    elif asin:
-                        product_name = get_product_name_from_asin(asin, master_df)
-                    else:
-                        product_name = "Unknown"
+                    # single_page = doc[single_page_idx]
+                    # page_text = single_page.get_text()
+                    # asin = extract_asin_from_page(page_text)
+                    # 
+                    # # Phase 1: Use O(1) dictionary lookup instead of DataFrame search
+                    # if asin and asin_lookup_dict:
+                    #     product_name = asin_lookup_dict.get(asin, "Unknown")
+                    # elif asin:
+                    #     product_name = get_product_name_from_asin(asin, master_df)
+                    # else:
+                    #     product_name = "Unknown"
                     
                     customer_pairs.append({
-                        'asin': asin if asin else "ZZZ_NO_ASIN",
-                        'product_name': product_name,
+                        # 'asin': asin if asin else "ZZZ_NO_ASIN",
+                        # 'product_name': product_name,
                         'shipping_page_idx': single_page_idx,
                         'invoice_page_idx': None,
                         'original_pair_num': len(customer_pairs) + 1
                     })
             
-            # Sort pairs by Product Name (primary) and ASIN (secondary)
+            # FUTURE USE: Sort pairs by Product Name (primary) and ASIN (secondary)
             # This groups similar products together (e.g., all Sattu variants)
-            customer_pairs.sort(key=lambda x: (x['product_name'], x['asin']))
+            # COMMENTED OUT: Sorting disabled - pages kept in original order
+            # customer_pairs.sort(key=lambda x: (x['product_name'], x['asin']))
             
-            # Create new PDF with sorted pages
+            # Create new PDF with pages in original order
             sorted_pdf = fitz.open()
             
             for pair in customer_pairs:
@@ -490,8 +492,8 @@ def sort_pdf_by_asin(pdf_bytes, master_df=None, asin_lookup_dict=None):
                 if pair['invoice_page_idx'] is not None:
                     sorted_pdf.insert_pdf(doc, from_page=pair['invoice_page_idx'], to_page=pair['invoice_page_idx'])
             
-            # Apply highlighting to invoice pages in sorted PDF
-            # Invoice pages are at odd indices (1, 3, 5, ...) in sorted PDF
+            # Apply highlighting to invoice pages
+            # Invoice pages are at odd indices (1, 3, 5, ...)
             for i in range(1, len(sorted_pdf), 2):
                 if i < len(sorted_pdf):
                     highlight_invoice_page(sorted_pdf[i])
@@ -511,11 +513,11 @@ def sort_pdf_by_asin(pdf_bytes, master_df=None, asin_lookup_dict=None):
             output_buffer.seek(0)
             sorted_pdf.close()
             
-            logger.info(f"Sorted {len(customer_pairs)} customer pairs by ASIN")
+            logger.info(f"Highlighted {len(customer_pairs)} customer pairs (original order preserved)")
             return output_buffer
             
     except Exception as e:
-        logger.error(f"Error sorting PDF by ASIN: {str(e)}")
+        logger.error(f"Error highlighting PDF: {str(e)}")
         return None
 
 
@@ -616,6 +618,7 @@ def packing_plan_tool():
                     })
                     physical_rows.append({
                         "item": f"UNKNOWN PRODUCT ({asin})",
+                        "item_name_for_labels": f"UNKNOWN PRODUCT ({asin})",  # Same as item for unknown products
                         "weight": "N/A",
                         "Qty": qty,
                         "Packet Size": "N/A",
@@ -626,14 +629,78 @@ def packing_plan_tool():
                         "FSSAI": "N/A",
                         "Packed Today": "",
                         "Available": "",
-                        "Status": "⚠️ MISSING FROM MASTER"
+                        "Status": "⚠️ MISSING FROM MASTER",
+                        "is_split": False  # Not a split product
                     })
                     continue
                 
                 base = match_row.iloc[0]
                 split = str(base.get("Split Into", "")).strip()
                 name = base.get("Name", "Unknown Product")
+                
+                # Extract weight with robust handling for different types (int, float, string, NaN)
+                # Try multiple ways to access the column to handle variations in column names
+                base_weight_raw = None
+                try:
+                    # Method 1: Try direct access (most reliable if column exists)
+                    if "Net Weight" in base.index:
+                        base_weight_raw = base["Net Weight"]
+                        logger.debug(f"Found 'Net Weight' column for {name}: {base_weight_raw} (type: {type(base_weight_raw)})")
+                    elif "NetWeight" in base.index:
+                        base_weight_raw = base["NetWeight"]
+                        logger.debug(f"Found 'NetWeight' column for {name}: {base_weight_raw} (type: {type(base_weight_raw)})")
+                    else:
+                        # Method 2: Try .get() with variations
+                        base_weight_raw = base.get("Net Weight")
+                        if base_weight_raw is None:
+                            base_weight_raw = base.get("NetWeight")
+                        if base_weight_raw is not None:
+                            logger.debug(f"Found weight via .get() for {name}: {base_weight_raw} (type: {type(base_weight_raw)})")
+                except (KeyError, AttributeError) as e:
+                    logger.debug(f"Error accessing Net Weight column directly for {name}: {e}")
+                    # Method 3: Fallback to .get() with default
+                    base_weight_raw = base.get("Net Weight")
+                    if base_weight_raw is None:
+                        base_weight_raw = base.get("NetWeight")
+                
+                # Convert to string, handling all numeric types (int, float) and strings
+                base_weight = ""
+                if base_weight_raw is not None and not pd.isna(base_weight_raw):
+                    # Handle numeric types (int/float) - explicitly check for both
+                    if isinstance(base_weight_raw, int):
+                        # Convert integer to string (e.g., 1 -> "1")
+                        base_weight = str(base_weight_raw).strip()
+                        logger.debug(f"✓ Extracted INTEGER weight for {name}: {base_weight_raw} (type: {type(base_weight_raw)}) -> '{base_weight}'")
+                    elif isinstance(base_weight_raw, float):
+                        # Convert float to string (e.g., 0.7 -> "0.7")
+                        base_weight = str(base_weight_raw).strip()
+                        logger.debug(f"✓ Extracted FLOAT weight for {name}: {base_weight_raw} (type: {type(base_weight_raw)}) -> '{base_weight}'")
+                    else:
+                        # Handle string types
+                        base_weight = str(base_weight_raw).strip()
+                        logger.debug(f"✓ Extracted STRING weight for {name}: '{base_weight_raw}' (type: {type(base_weight_raw)}) -> '{base_weight}'")
+                else:
+                    logger.warning(f"✗ No weight found for {name}: raw={base_weight_raw}, is_none={base_weight_raw is None}, is_na={pd.isna(base_weight_raw) if base_weight_raw is not None else 'N/A'}")
+                
                 fnsku = str(base.get("FNSKU", "")).strip()
+                
+                # Construct original product name with weight for split products
+                # Example: "Coconut Thekua" + "0.7kg" = "Coconut Thekua 0.7"
+                # Example: "Moori (Puffed Rice)" + "1" = "Moori (Puffed Rice) 1"
+                original_name_with_weight = name
+                if base_weight:
+                    # Check if it's a valid non-empty value
+                    is_empty = is_empty_value(base_weight)
+                    if not is_empty:
+                        # Normalize weight: remove "kg" suffix if present for cleaner display
+                        # Handles: "0.7kg" -> "0.7", "1kg" -> "1", "0.7" -> "0.7", "1" -> "1"
+                        weight_display = base_weight.replace("kg", "").strip() if base_weight.lower().endswith("kg") else base_weight
+                        original_name_with_weight = f"{name} {weight_display}"
+                        logger.info(f"✓✓✓ SUCCESS: Added weight to split product name: '{name}' -> '{original_name_with_weight}' (weight_display: '{weight_display}', base_weight: '{base_weight}')")
+                    else:
+                        logger.warning(f"✗ Weight is empty for {name}: base_weight='{base_weight}', is_empty_value={is_empty}")
+                else:
+                    logger.warning(f"✗ No weight to append for split product: '{name}' (base_weight: '{base_weight}', raw: {base_weight_raw}, type: {type(base_weight_raw)})")
                 
                 # Check if FNSKU is missing
                 if is_empty_value(fnsku):
@@ -659,10 +726,13 @@ def packing_plan_tool():
                                 sub = sub_match.iloc[0]
                                 sub_fnsku = str(sub.get("FNSKU", "")).strip()
                                 status = "✅ READY" if not is_empty_value(sub_fnsku) else "⚠️ MISSING FNSKU"
+                                # Use the ORIGINAL product name WITH weight (e.g., "Coconut Thekua 0.7")
+                                # Weight column will show the split variant weight (e.g., 0.35)
                                 
                                 physical_rows.append({
-                                    "item": name,
-                                    "weight": sub.get("Net Weight", "N/A"),
+                                    "item": original_name_with_weight,  # Original name with weight (e.g., "Coconut Thekua 0.7") - for PDF display
+                                    "item_name_for_labels": name,  # Original name without weight (e.g., "Coconut Thekua") - for labels
+                                    "weight": sub.get("Net Weight", "N/A"),  # Split variant weight (e.g., "0.35")
                                     "Qty": qty,
                                     "Packet Size": sub.get("Packet Size", "N/A"),
                                     "Packet used": sub.get("Packet used", "N/A"),
@@ -672,7 +742,8 @@ def packing_plan_tool():
                                     "FSSAI": sub.get("FSSAI", "N/A"),
                                     "Packed Today": "",
                                     "Available": "",
-                                    "Status": status
+                                    "Status": status,
+                                    "is_split": True  # Mark as split product
                                 })
                                 split_found = True
                         except (ValueError, KeyError, AttributeError) as e:
@@ -697,6 +768,7 @@ def packing_plan_tool():
                     
                     physical_rows.append({
                         "item": name,
+                        "item_name_for_labels": name,  # Same as item for non-split products
                         "weight": base.get("Net Weight", "N/A"),
                         "Qty": qty,
                         "Packet Size": base.get("Packet Size", "N/A"),
@@ -707,7 +779,8 @@ def packing_plan_tool():
                         "FSSAI": base.get("FSSAI", "N/A"),
                         "Packed Today": "",
                         "Available": "",
-                        "Status": status
+                        "Status": status,
+                        "is_split": False  # Not a split product
                     })
             except (ValueError, KeyError) as e:
                 # Phase 3: Specific exception handling
@@ -728,8 +801,9 @@ def packing_plan_tool():
         if not df_physical.empty:
             try:
                 # Group by all columns except Qty to sum quantities for identical items
+                # Include is_split and item_name_for_labels in groupby to preserve split marking and label names
                 df_physical = df_physical.groupby(
-                    ["item", "weight", "Packet Size", "Packet used", "ASIN", "MRP", "FNSKU", "FSSAI", "Packed Today", "Available", "Status"],
+                    ["item", "item_name_for_labels", "weight", "Packet Size", "Packet used", "ASIN", "MRP", "FNSKU", "FSSAI", "Packed Today", "Available", "Status", "is_split"],
                     as_index=False
                 ).agg({"Qty": "sum"})
             except Exception as e:
@@ -740,11 +814,32 @@ def packing_plan_tool():
         
         return df_physical, missing_products
 
-    def generate_summary_pdf(original_df, physical_df, missing_products=None):
+    def generate_summary_pdf(original_df, physical_df, missing_products=None, total_invoices=0, invoice_has_multi_qty=None):
         """Generate PDF summary with proper encoding handling"""
         try:
             pdf = FPDF()
             timestamp = datetime.now().strftime("%d %b %Y, %I:%M %p")
+
+            def calculate_statistics(original_df, physical_df, missing_products=None, total_invoices=0, invoice_has_multi_qty=None):
+                """Calculate summary statistics for the packing plan"""
+                stats = {}
+                # Total invoices
+                stats['total_invoices'] = total_invoices
+                # Multi qty invoices (customers who ordered items with qty > 1)
+                if invoice_has_multi_qty:
+                    stats['multi_qty_invoices'] = sum(1 for has_multi in invoice_has_multi_qty if has_multi)
+                else:
+                    stats['multi_qty_invoices'] = 0
+                # Single item invoices (customers who ordered only single items)
+                if invoice_has_multi_qty:
+                    stats['single_item_invoices'] = sum(1 for has_multi in invoice_has_multi_qty if not has_multi)
+                else:
+                    stats['single_item_invoices'] = 0
+                # Total quantity ordered
+                stats['total_qty_ordered'] = int(original_df['Qty'].sum()) if not original_df.empty and 'Qty' in original_df.columns else 0
+                # Total quantity physical
+                stats['total_qty_physical'] = int(physical_df['Qty'].sum()) if not physical_df.empty and 'Qty' in physical_df.columns else 0
+                return stats
 
             def clean_text(text):
                 """Clean text for PDF generation"""
@@ -766,14 +861,16 @@ def packing_plan_tool():
 
             def add_table(df, title, include_tracking=False, hide_asin=False):
                 """Add table to PDF"""
-                pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 10, clean_text(title), 0, 1, "C")
-                pdf.set_font("Arial", "", 10)
-                pdf.cell(0, 8, f"Generated on: {timestamp}", 0, 1, "C")
-                pdf.ln(2)
+                # Only add title and timestamp if title is provided
+                if title:
+                    pdf.set_font("Arial", "B", 12)
+                    pdf.cell(0, 10, clean_text(title), 0, 1, "C")
+                    pdf.set_font("Arial", "", 10)
+                    pdf.cell(0, 8, f"Generated on: {timestamp}", 0, 1, "C")
+                    pdf.ln(2)
 
-                headers = ["Item", "Weight", "Qty", "Packet Size"]
-                col_widths = [50, 25, 20, 35]
+                headers = ["S.N.", "Item", "Weight", "Qty", "Packet Size"]
+                col_widths = [15, 50, 25, 20, 25]  # Reduced Packet Size from 35 to 25 for more white space
 
                 if not hide_asin:
                     headers.append("ASIN")
@@ -791,10 +888,15 @@ def packing_plan_tool():
                 pdf.ln()
 
                 pdf.set_font("Arial", "", 10)
-                for _, row in df.iterrows():
+                for idx, (_, row) in enumerate(df.iterrows(), start=1):
                     pdf.set_x(margin_x)
+                    # Use item name as-is (split variants already have their full name like "Coconut Thekua 0.7")
+                    item_name = clean_text(str(row.get("item", "")))
+                    is_split = row.get("is_split", False) if "is_split" in row.index else False
+                    
                     values = [
-                        clean_text(str(row.get("item", "")))[:20],
+                        str(idx),  # Serial number
+                        item_name[:20],  # Item name (split variants show full name like "Coconut Thekua 0.7")
                         clean_text(str(row.get("weight", ""))),
                         str(row.get("Qty", 0)),
                         clean_text(str(row.get("Packet Size", "")))[:15]
@@ -806,15 +908,42 @@ def packing_plan_tool():
                             clean_text(str(row.get("Packed Today", ""))),
                             clean_text(str(row.get("Available", "")))
                         ]
-                        
-                    for val, width in zip(values, col_widths):
-                        pdf.cell(width, 10, str(val)[:width//2], 1)  # Truncate to fit
+                    
+                    # Display values - make item name bold if it's a split product
+                    for col_idx, (val, width) in enumerate(zip(values, col_widths)):
+                        # If this is the item column (index 1) and it's a split product, use bold
+                        if col_idx == 1 and is_split:
+                            pdf.set_font("Arial", "B", 10)  # Bold for split items
+                            pdf.cell(width, 10, str(val)[:width//2], 1)  # Truncate to fit
+                            pdf.set_font("Arial", "", 10)  # Reset to regular font
+                        else:
+                            pdf.cell(width, 10, str(val)[:width//2], 1)  # Truncate to fit
                     pdf.ln()
 
             pdf.add_page()
-            add_table(original_df, "Original Ordered Items (from Invoice)", hide_asin=False)
+            # Main heading
+            pdf.set_font("Arial", "B", 18)
+            pdf.cell(0, 15, "Amazon Actual Packing Plan", 0, 1, "C")
+            pdf.set_font("Arial", "", 10)
+            pdf.cell(0, 8, f"Generated on: {timestamp}", 0, 1, "C")
+            pdf.ln(3)
+            
+            # Calculate and display statistics
+            # Get invoice_has_multi_qty from the processing context
+            # We'll pass it through the function call
+            stats = calculate_statistics(original_df, physical_df, missing_products, total_invoices, invoice_has_multi_qty)
+            
+            # Statistics section - center aligned and semi-bold, all in one line
+            pdf.set_font("Arial", "B", 10)  # Semi-bold (B = bold, size 10)
+            stat_col_width = 70
+            stat_start_x = (210 - (stat_col_width * 3)) / 2
+            pdf.set_x(stat_start_x)
+            pdf.cell(stat_col_width, 8, f"Total Invoices: {stats['total_invoices']}", 0, 0, "C")
+            pdf.cell(stat_col_width, 8, f"Total Qty Ordered: {stats['total_qty_ordered']}", 0, 0, "C")
+            pdf.cell(stat_col_width, 8, f"Total Qty Physical: {stats['total_qty_physical']}", 0, 1, "C")
+            
             pdf.ln(5)
-            add_table(physical_df, "Actual Physical Packing Plan", include_tracking=True, hide_asin=True)
+            add_table(physical_df, "", include_tracking=True, hide_asin=True)
             
             # Fixed PDF output handling
             output_buffer = BytesIO()
@@ -899,7 +1028,8 @@ def packing_plan_tool():
         for idx, (_, row) in enumerate(sticker_products.iterrows()):
             fnsku = str(row.get('FNSKU', '')).strip()
             qty = int(row.get('Qty', 0))
-            product_name = str(row.get("item", "")).strip()
+            # Use item_name_for_labels for labels (original name without weight), fallback to item
+            product_name = str(row.get("item_name_for_labels", row.get("item", ""))).strip()
             
             # Removed progress callback to prevent reruns - labels are cached in session state
             
@@ -928,7 +1058,8 @@ def packing_plan_tool():
         for idx, (_, row) in enumerate(house_products.iterrows()):
             fnsku = str(row.get('FNSKU', '')).strip()
             qty = int(row.get('Qty', 0))
-            product_name = str(row.get("item", "")).strip()
+            # Use item_name_for_labels for labels (original name without weight), fallback to item
+            product_name = str(row.get("item_name_for_labels", row.get("item", ""))).strip()
             
             # Removed progress callback to prevent reruns - labels are cached in session state
             
@@ -1002,6 +1133,10 @@ def packing_plan_tool():
         
         return sticker_buffer, house_buffer, sticker_count, house_count, skipped_products
 
+    # Initialize total_invoice_count and invoice_has_multi_qty at function scope level
+    total_invoice_count = 0
+    invoice_has_multi_qty = []
+    
     if pdf_files:
         logger.info(f"Processing {len(pdf_files)} PDF files")
         
@@ -1045,13 +1180,14 @@ def packing_plan_tool():
         
         asin_qty_data = defaultdict(int)
         all_pdf_bytes = []
+        # total_invoice_count and invoice_has_multi_qty are already initialized at function scope
         
         # Improved ASIN pattern
         asin_pattern = re.compile(r"\b(B[0-9A-Z]{9})\b")
         qty_pattern = re.compile(r"\bQty\b.*?(\d+)")
         price_qty_pattern = re.compile(r"₹[\d,.]+\s+(\d+)\s+₹[\d,.]+")
 
-        # First pass: Extract ASINs and quantities, collect all PDF bytes
+        # First pass: Extract ASINs and quantities, collect all PDF bytes, count invoices
         total_files = len(pdf_files)
         for file_idx, uploaded_file in enumerate(pdf_files):
             # Phase 0: Update progress
@@ -1065,6 +1201,69 @@ def packing_plan_tool():
                 
                 with safe_pdf_context(pdf_bytes) as doc:
                     pages_text = [page.get_text().split("\n") for page in doc]
+                    
+                    # Process each page to count invoices and track multi-qty invoices
+                    for page_idx, page_text in enumerate(pages_text):
+                        page_text_combined = " ".join(page_text).upper()
+                        # Check if this page is an invoice page (has invoice table headers)
+                        is_invoice_page = "DESCRIPTION" in page_text_combined and ("QTY" in page_text_combined or "QUANTITY" in page_text_combined)
+                        
+                        if is_invoice_page:
+                            total_invoice_count += 1
+                            # Track if this invoice has any items with qty > 1
+                            invoice_has_multi = False
+                            
+                            # Check quantities in this invoice page
+                            lines = page_text
+                            for i, line in enumerate(lines):
+                                line_upper = line.upper()
+                                # Look for quantity patterns in invoice table
+                                if "DESCRIPTION" in line_upper and ("QTY" in line_upper or "QUANTITY" in line_upper):
+                                    # We're in the invoice table, check next lines for quantities
+                                    search_range = min(i + 20, len(lines))
+                                    for j in range(i + 1, search_range):
+                                        qty_line = lines[j]
+                                        
+                                        # Stop if we hit TOTAL or end of table
+                                        if "TOTAL" in qty_line.upper():
+                                            break
+                                        
+                                        # Check for quantity > 1
+                                        qty_match = qty_pattern.search(qty_line)
+                                        if qty_match:
+                                            qty_val = int(qty_match.group(1))
+                                            if qty_val > 1:
+                                                invoice_has_multi = True
+                                                break
+                                        
+                                        # Also check price-quantity patterns
+                                        price_qty_match = price_qty_pattern.search(qty_line)
+                                        if price_qty_match:
+                                            qty_val = int(price_qty_match.group(1))
+                                            if qty_val > 1:
+                                                invoice_has_multi = True
+                                                break
+                                        
+                                        # Check multi-item pattern
+                                        multi_item_match = re.search(r'^(\d+)\s+₹[\d,]+\.?\d*\s+\d+%?\s*(IGST|CGST|SGST)', qty_line.strip())
+                                        if multi_item_match:
+                                            qty_val = int(multi_item_match.group(1))
+                                            if qty_val > 1:
+                                                invoice_has_multi = True
+                                                break
+                                        
+                                        # Check standalone number pattern
+                                        standalone_match = re.search(r'^(\d+)', qty_line.strip())
+                                        if standalone_match:
+                                            qty_val = int(standalone_match.group(1))
+                                            if 1 < qty_val <= 100 and re.search(r'₹[\d,]+\.?\d*', qty_line):
+                                                invoice_has_multi = True
+                                                break
+                                    
+                                    if invoice_has_multi:
+                                        break
+                            
+                            invoice_has_multi_qty.append(invoice_has_multi)
 
                     for lines in pages_text:
                         # Track location context for invoice table vs address sections
@@ -1189,9 +1388,9 @@ def packing_plan_tool():
                 logger.error(error_msg)
                 st.warning(f"⚠️ **Unexpected Error**: Could not process '{uploaded_file.name}'. Error: {str(e)}")
         
-        # Second pass: Combine all PDFs and sort by ASIN (OUTSIDE LOOP - FIXED)
+        # Second pass: Combine all PDFs and apply highlighting (OUTSIDE LOOP - FIXED)
         # Phase 0: Update progress for second pass
-        status_text.text("🔄 Combining PDFs and sorting by Product Name & ASIN...")
+        status_text.text("🔄 Combining PDFs and applying highlighting...")
         progress_bar.progress(0.5)
         
         sorted_highlighted_pdf = None
@@ -1213,10 +1412,10 @@ def packing_plan_tool():
                 
                 # Phase 0: Update progress
                 progress_bar.progress(0.75)
-                status_text.text("🎨 Applying highlighting and finalizing sorted PDF...")
+                status_text.text("🎨 Applying highlighting and finalizing PDF...")
                 
                 # Phase 1: Pass lookup dictionary for faster processing
-                # IMPORTANT: All uploaded PDFs are combined into a single sorted PDF
+                # IMPORTANT: All uploaded PDFs are combined into a single highlighted PDF
                 sorted_highlighted_pdf = sort_pdf_by_asin(combined_bytes, master_df, asin_lookup_dict)
                 
                 # Phase 0: Complete progress
@@ -1224,22 +1423,22 @@ def packing_plan_tool():
                 status_text.text("✅ PDF processing complete!")
                 
                 # Document that all PDFs are combined
-                logger.info(f"Combined {len(all_pdf_bytes)} PDF files into single sorted PDF")
+                logger.info(f"Combined {len(all_pdf_bytes)} PDF files into single highlighted PDF")
                 
             except (IOError, OSError, MemoryError) as e:
                 # Phase 3: Specific exception handling for PDF operations
                 error_type = type(e).__name__
-                error_msg = f"Error combining and sorting PDFs: {error_type} - {str(e)}"
+                error_msg = f"Error combining and highlighting PDFs: {error_type} - {str(e)}"
                 logger.error(error_msg)
                 if isinstance(e, MemoryError):
                     st.error(f"❌ **Memory Error**: PDFs are too large to process together ({total_size_mb:.2f} MB). Try processing fewer files at once.")
                 else:
-                    st.error(f"❌ **PDF Processing Error** ({error_type}): {str(e)}. The sorted PDF will not be available, but other features will still work.")
+                    st.error(f"❌ **PDF Processing Error** ({error_type}): {str(e)}. The highlighted PDF will not be available, but other features will still work.")
             except Exception as e:
                 # Phase 3: Catch-all for unexpected errors
-                error_msg = f"Unexpected error combining and sorting PDFs: {str(e)}"
+                error_msg = f"Unexpected error combining and highlighting PDFs: {str(e)}"
                 logger.error(error_msg)
-                st.error(f"❌ **Unexpected Error**: {str(e)}. The sorted PDF will not be available, but other features will still work.")
+                st.error(f"❌ **Unexpected Error**: {str(e)}. The highlighted PDF will not be available, but other features will still work.")
         else:
             progress_bar.progress(1.0)
             status_text.empty()
@@ -1372,7 +1571,9 @@ def packing_plan_tool():
             # Generate summary PDF
             summary_pdf = None
             try:
-                summary_pdf = generate_summary_pdf(df_orders, df_physical, missing_products)
+                # total_invoice_count and invoice_has_multi_qty are calculated during PDF processing
+                # Pass invoice_has_multi_qty to the PDF generation function
+                summary_pdf = generate_summary_pdf(df_orders, df_physical, missing_products, total_invoice_count, invoice_has_multi_qty)
             except Exception as e:
                 st.error(f"Error generating PDF: {str(e)}")
             
@@ -1391,13 +1592,13 @@ def packing_plan_tool():
             
             st.markdown("---")
             
-            # Sorted PDF
+            # Highlighted PDF
             if sorted_highlighted_pdf:
                 sorted_pdf_key_suffix = get_unique_key_suffix(sorted_highlighted_pdf)
                 st.download_button(
-                    "Sorted Invoices PDF", 
+                    "Highlighted Invoices PDF", 
                     data=sorted_highlighted_pdf, 
-                    file_name=f"Sorted_Invoices_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", 
+                    file_name=f"Highlighted_Invoices_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", 
                     mime="application/pdf",
                     key=f"download_sorted_pdf_{sorted_pdf_key_suffix}",
                     use_container_width=True
@@ -1557,7 +1758,8 @@ def packing_plan_tool():
                                         product_list = []
                                         for _, row in sticker_house_products.iterrows():
                                             try:
-                                                product_name = str(row.get("item", "")).strip()
+                                                # Use item_name_for_labels for labels (original name without weight), fallback to item
+                                                product_name = str(row.get("item_name_for_labels", row.get("item", ""))).strip()
                                                 qty = int(row.get("Qty", 1))
                                                 
                                                 if not product_name or product_name.lower() == "nan":
