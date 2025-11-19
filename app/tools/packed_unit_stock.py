@@ -173,8 +173,13 @@ def generate_pdf(dataframe):
         pdf.cell(50, 10, str(row['SKU/Unit']), 1)
         pdf.cell(40, 10, str(row['Count(Qty)']), 1)
         pdf.ln()
-        
-    return pdf.output(dest='S').encode('latin-1')
+    
+    # pdf.output(dest='S') returns bytes directly in fpdf2, no need to encode
+    pdf_bytes = pdf.output(dest='S')
+    # Ensure it's bytes (handle both bytes and bytearray)
+    if isinstance(pdf_bytes, bytearray):
+        return bytes(pdf_bytes)
+    return pdf_bytes
 
 def generate_png(dataframe):
     """Generates a PNG image of the table using Matplotlib."""
