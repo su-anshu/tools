@@ -12,6 +12,7 @@ PyMuPDF
 # Images and barcode support
 Pillow
 python-barcode[images]
+matplotlib
 
 # Date handling
 python-dateutil

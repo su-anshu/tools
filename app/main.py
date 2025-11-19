@@ -270,6 +270,21 @@ try:
             st.info("💡 **Solution**: Check your Excel file format and data directory permissions")
             logger.error(f"Runtime error in manual_packing_plan: {str(e)}")
 
+    elif tool == "Packed Unit Stock" or tool == "📊 Packed Unit Stock":
+        try:
+            from app.tools.packed_unit_stock import packed_unit_stock
+            packed_unit_stock()
+        except ImportError as e:
+            st.error(f"❌ **Module Error**: Could not load Packed Unit Stock Processor")
+            st.error(f"**Details**: {str(e)}")
+            st.info("💡 **Solution**: Ensure all dependencies are installed: `pip install -r requirements.txt`")
+            logger.error(f"Import error in packed_unit_stock: {str(e)}")
+        except Exception as e:
+            st.error(f"❌ **Runtime Error**: Error running Packed Unit Stock Processor")
+            st.error(f"**Details**: {str(e)}")
+            st.info("💡 **Solution**: Check your Excel/CSV file format and try again")
+            logger.error(f"Runtime error in packed_unit_stock: {str(e)}")
+
 except Exception as e:
     st.error(f"Unexpected error in main application: {str(e)}")
     logger.error(f"Unexpected error in main_app: {str(e)}")

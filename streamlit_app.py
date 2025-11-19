@@ -119,6 +119,11 @@ if st.sidebar.button("🔖 Manual Plan", use_container_width=True, type="primary
     st.session_state.selected_tool = "Manual Plan"
     st.rerun()
 
+is_packed_unit_selected = st.session_state.selected_tool == "Packed Unit Stock"
+if st.sidebar.button("📊 Packed Unit Stock", use_container_width=True, type="primary" if is_packed_unit_selected else "secondary", key="packed_unit_stock"):
+    st.session_state.selected_tool = "Packed Unit Stock"
+    st.rerun()
+
 # Get the selected tool for loading
 tool = st.session_state.selected_tool
 
@@ -235,6 +240,21 @@ try:
             st.error(f"**Details**: {str(e)}")
             st.info("💡 **Solution**: Check your Excel file format and try again")
             logger.error(f"Runtime error in flipkart_report: {str(e)}")
+
+    elif tool == "Packed Unit Stock":
+        try:
+            from app.tools.packed_unit_stock import packed_unit_stock
+            packed_unit_stock()
+        except ImportError as e:
+            st.error(f"❌ **Module Error**: Could not load Packed Unit Stock Processor")
+            st.error(f"**Details**: {str(e)}")
+            st.info("💡 **Solution**: Ensure all dependencies are installed: `pip install -r requirements.txt`")
+            logger.error(f"Import error in packed_unit_stock: {str(e)}")
+        except Exception as e:
+            st.error(f"❌ **Runtime Error**: Error running Packed Unit Stock Processor")
+            st.error(f"**Details**: {str(e)}")
+            st.info("💡 **Solution**: Check your Excel/CSV file format and try again")
+            logger.error(f"Runtime error in packed_unit_stock: {str(e)}")
 
 except Exception as e:
     st.error(f"Unexpected error in main application: {str(e)}")
