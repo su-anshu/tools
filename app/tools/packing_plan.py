@@ -9,6 +9,7 @@ from datetime import datetime
 import os
 import logging
 import hashlib
+import time
 from app.sidebar import MASTER_FILE, BARCODE_PDF_PATH
 from app.tools.label_generator import generate_combined_label_pdf_direct, generate_pdf, generate_triple_label_combined
 from app.tools.product_label_generator import create_label_pdf, create_pair_label_pdf
@@ -60,6 +61,11 @@ def highlight_large_qty(pdf_bytes):
                         continue
 
                     if in_table:
+                        # Skip HSN lines explicitly
+                        upper_text = text.upper()
+                        if "HSN" in upper_text:
+                            continue
+                        
                         # Skip blocks without digits
                         if not any(char.isdigit() for char in text):
                             continue
@@ -72,15 +78,16 @@ def highlight_large_qty(pdf_bytes):
                         should_highlight = False
                         found_qty = None
                         
-                        # Method 1: Look for standalone numbers > 1
-                        values = text.split()
-                        for val in values:
-                            if val.isdigit():
-                                qty_val = int(val)
-                                if qty_val > 1 and qty_val <= 100:  # Reasonable quantity range
-                                    should_highlight = True
-                                    found_qty = qty_val
-                                    break
+                        # Method 1: Look for standalone numbers > 1 (MUST have ₹ price)
+                        if "₹" in text:
+                            values = text.split()
+                            for val in values:
+                                if val.isdigit():
+                                    qty_val = int(val)
+                                    if 1 < qty_val <= 100:
+                                        should_highlight = True
+                                        found_qty = qty_val
+                                        break
                         
                         # Method 2: Look for price-quantity patterns
                         if not should_highlight:
@@ -124,7 +131,7 @@ def highlight_large_qty(pdf_bytes):
                             highlight_box = fitz.Rect(x0, y0, x1, y1)
                             page.draw_rect(highlight_box, color=(1, 0, 0), fill_opacity=0.4)
                             highlighted_count += 1
-                            logger.info(f"Highlighted block {block_idx} on page {page_num + 1} with qty {found_qty}")
+                            logger.info(f"[HIGHLIGHT] Page {page_num + 1} Qty={found_qty} Text={text[:80]}")
 
                     # Exit table when we see TOTAL
                     if "TOTAL" in text.upper():
@@ -325,9 +332,15 @@ def highlight_invoice_page(page):
             # Detect table start
             if "Description" in text and "Qty" in text:
                 in_table = True
+                logger.info(f"Table started at block {block_idx} on page {page.number+1}")
                 continue
             
             if in_table:
+                # Skip HSN lines explicitly
+                upper_text = text.upper()
+                if "HSN" in upper_text:
+                    continue
+                
                 # Skip blocks without digits
                 if not any(char.isdigit() for char in text):
                     continue
@@ -336,19 +349,20 @@ def highlight_invoice_page(page):
                 if any(header in text for header in ["Qty", "Unit Price", "Total", "Description"]):
                     continue
                 
-                # Look for quantities > 1
+                # Look for quantities > 1 in the text block
                 should_highlight = False
                 found_qty = None
                 
-                # Method 1: Look for standalone numbers > 1
-                values = text.split()
-                for val in values:
-                    if val.isdigit():
-                        qty_val = int(val)
-                        if qty_val > 1 and qty_val <= 100:
-                            should_highlight = True
-                            found_qty = qty_val
-                            break
+                # Method 1: Look for standalone numbers > 1 (MUST have ₹ price)
+                if "₹" in text:
+                    values = text.split()
+                    for val in values:
+                        if val.isdigit():
+                            qty_val = int(val)
+                            if 1 < qty_val <= 100:
+                                should_highlight = True
+                                found_qty = qty_val
+                                break
                 
                 # Method 2: Look for price-quantity patterns
                 if not should_highlight:
@@ -360,12 +374,13 @@ def highlight_invoice_page(page):
                             found_qty = qty_val
                             break
                 
-                # Method 3: Look for lines starting with quantity
+                # Method 3: Look for lines starting with quantity but avoid tax percentages
                 if not should_highlight:
                     lines_in_block = text.split('\n')
                     for line in lines_in_block:
                         line = line.strip()
                         if line:
+                            # Look for pattern: "3 ₹2,768.67 5% IGST" but not "5% IGST"
                             qty_match = re.search(r'^(\d+)\s+₹[\d,]+\.?\d*\s+\d+%?\s*(IGST|CGST|SGST)', line)
                             if qty_match:
                                 qty_val = int(qty_match.group(1))
@@ -374,6 +389,8 @@ def highlight_invoice_page(page):
                                     found_qty = qty_val
                                     break
                             
+                            # Alternative pattern: look for standalone numbers > 1 followed by price
+                            # but exclude tax percentages
                             alt_match = re.search(r'^(\d+)', line)
                             if alt_match:
                                 qty_val = int(alt_match.group(1))
@@ -384,15 +401,17 @@ def highlight_invoice_page(page):
                                     found_qty = qty_val
                                     break
                 
-                # Highlight the block if quantity > 1 found
+                # Highlight the entire block if quantity > 1 found
                 if should_highlight:
                     highlight_box = fitz.Rect(x0, y0, x1, y1)
                     page.draw_rect(highlight_box, color=(1, 0, 0), fill_opacity=0.4)
                     highlighted_count += 1
-                
-                # Exit table when we see TOTAL
-                if "TOTAL" in text.upper():
-                    in_table = False
+                    logger.info(f"[HIGHLIGHT] Page {page.number+1} Qty={found_qty} Text={text[:80]}")
+            
+            # Exit table when we see TOTAL
+            if "TOTAL" in text.upper():
+                in_table = False
+                logger.info(f"Table ended at block {block_idx} on page {page.number+1}")
         
         return highlighted_count
     except Exception as e:
@@ -493,19 +512,13 @@ def sort_pdf_by_asin(pdf_bytes, master_df=None, asin_lookup_dict=None):
                     sorted_pdf.insert_pdf(doc, from_page=pair['invoice_page_idx'], to_page=pair['invoice_page_idx'])
             
             # Apply highlighting to invoice pages
-            # Invoice pages are at odd indices (1, 3, 5, ...)
-            for i in range(1, len(sorted_pdf), 2):
-                if i < len(sorted_pdf):
-                    highlight_invoice_page(sorted_pdf[i])
-            
-            # Also handle case where last page is single (if odd total pages)
-            if total_pages % 2 == 1 and len(sorted_pdf) % 2 == 1:
-                # Last page might be an invoice if it was a single page
-                last_idx = len(sorted_pdf) - 1
-                last_page_text = sorted_pdf[last_idx].get_text()
-                # Check if it looks like an invoice (has "Description" or "Qty")
-                if "Description" in last_page_text or "Qty" in last_page_text:
-                    highlight_invoice_page(sorted_pdf[last_idx])
+            # Use content-based detection instead of index assumptions
+            for i in range(len(sorted_pdf)):
+                page = sorted_pdf[i]
+                page_text = page.get_text().upper()
+                if "DESCRIPTION" in page_text and ("QTY" in page_text or "QUANTITY" in page_text):
+                    logger.info(f"Running Qty highlight on page {i+1}")
+                    highlight_invoice_page(page)
             
             # Save to buffer
             output_buffer = BytesIO()
@@ -1137,7 +1150,13 @@ def packing_plan_tool():
     total_invoice_count = 0
     invoice_has_multi_qty = []
     
+    # Initialize processing state tracking
+    if 'processing_complete' not in st.session_state:
+        st.session_state.processing_complete = False
+    
     if pdf_files:
+        # Reset processing state when new files are uploaded
+        st.session_state.processing_complete = False
         logger.info(f"Processing {len(pdf_files)} PDF files")
         
         # Phase 1: Enhanced input validation
@@ -1176,6 +1195,8 @@ def packing_plan_tool():
         status_text = st.empty()
         
         # Phase 1: Create ASIN lookup dictionary once (Low Risk - Performance optimization)
+        status_text.text("🔄 Initializing... (0%)")
+        progress_bar.progress(0.0)
         asin_lookup_dict = create_asin_lookup_dict(master_df)
         
         asin_qty_data = defaultdict(int)
@@ -1188,12 +1209,13 @@ def packing_plan_tool():
         price_qty_pattern = re.compile(r"₹[\d,.]+\s+(\d+)\s+₹[\d,.]+")
 
         # First pass: Extract ASINs and quantities, collect all PDF bytes, count invoices
+        # Progress: 0-30% for first pass
         total_files = len(pdf_files)
         for file_idx, uploaded_file in enumerate(pdf_files):
-            # Phase 0: Update progress
-            progress = (file_idx + 1) / (total_files * 2)  # Half progress for first pass
+            # Phase 0: Update progress (0-30% for first pass)
+            progress = 0.0 + (file_idx + 1) / total_files * 0.30
             progress_bar.progress(progress)
-            status_text.text(f"📄 Processing file {file_idx + 1}/{total_files}: {uploaded_file.name}")
+            status_text.text(f"📄 Processing file {file_idx + 1}/{total_files}: {uploaded_file.name} ({int(progress * 100)}%)")
             try:
                 pdf_name = uploaded_file.name
                 pdf_bytes = uploaded_file.read()
@@ -1389,9 +1411,9 @@ def packing_plan_tool():
                 st.warning(f"⚠️ **Unexpected Error**: Could not process '{uploaded_file.name}'. Error: {str(e)}")
         
         # Second pass: Combine all PDFs and apply highlighting (OUTSIDE LOOP - FIXED)
-        # Phase 0: Update progress for second pass
-        status_text.text("🔄 Combining PDFs and applying highlighting...")
-        progress_bar.progress(0.5)
+        # Phase 0: Update progress for second pass (30-60% for combining)
+        status_text.text("🔄 Combining PDFs... (30%)")
+        progress_bar.progress(0.30)
         
         sorted_highlighted_pdf = None
         if all_pdf_bytes:
@@ -1410,17 +1432,17 @@ def packing_plan_tool():
                 combined_pdf.close()
                 combined_buffer.close()
                 
-                # Phase 0: Update progress
-                progress_bar.progress(0.75)
-                status_text.text("🎨 Applying highlighting and finalizing PDF...")
+                # Phase 0: Update progress (60% after combining)
+                progress_bar.progress(0.60)
+                status_text.text("🎨 Applying highlighting... (60%)")
                 
                 # Phase 1: Pass lookup dictionary for faster processing
                 # IMPORTANT: All uploaded PDFs are combined into a single highlighted PDF
                 sorted_highlighted_pdf = sort_pdf_by_asin(combined_bytes, master_df, asin_lookup_dict)
                 
-                # Phase 0: Complete progress
-                progress_bar.progress(1.0)
-                status_text.text("✅ PDF processing complete!")
+                # Phase 0: Update progress (80% after highlighting)
+                progress_bar.progress(0.80)
+                status_text.text("📊 Processing data... (80%)")
                 
                 # Document that all PDFs are combined
                 logger.info(f"Combined {len(all_pdf_bytes)} PDF files into single highlighted PDF")
@@ -1439,15 +1461,15 @@ def packing_plan_tool():
                 error_msg = f"Unexpected error combining and highlighting PDFs: {str(e)}"
                 logger.error(error_msg)
                 st.error(f"❌ **Unexpected Error**: {str(e)}. The highlighted PDF will not be available, but other features will still work.")
-        else:
-            progress_bar.progress(1.0)
-            status_text.empty()
-
-        # Phase 0: Clear progress indicators
-        progress_bar.empty()
-        status_text.empty()
+            else:
+                progress_bar.progress(1.0)
+                status_text.empty()
+                # Don't set processing_complete if no PDFs were processed
 
         if not asin_qty_data:
+            # Clear progress indicators on error
+            progress_bar.empty()
+            status_text.empty()
             st.error("❌ **No ASIN Codes Found**: No ASIN codes were found in the uploaded PDFs.")
             st.info("**Possible causes:**")
             st.write("• PDFs may not be Amazon invoice PDFs")
@@ -1456,7 +1478,9 @@ def packing_plan_tool():
             st.write("• Please verify the PDF files are valid Amazon invoices")
             return
 
-        # Create orders dataframe
+        # Create orders dataframe (80-85%)
+        progress_bar.progress(0.85)
+        status_text.text("📋 Creating orders dataframe... (85%)")
         df_orders = pd.DataFrame([{"ASIN": asin, "Qty": qty} for asin, qty in asin_qty_data.items()])
         df_orders = pd.merge(df_orders, master_df, on="ASIN", how="left")
         
@@ -1479,14 +1503,30 @@ def packing_plan_tool():
         
         df_orders = df_orders[available_columns]
 
-        # Phase 1: Pass lookup dictionary for faster processing
+        # Phase 1: Pass lookup dictionary for faster processing (85-90%)
+        progress_bar.progress(0.90)
+        status_text.text("🔧 Expanding to physical plan... (90%)")
         df_physical, missing_products = expand_to_physical(df_orders, master_df, asin_lookup_dict)
 
-        # Phase 0: Summary statistics
+        # Phase 0: Summary statistics (90-95%)
+        progress_bar.progress(0.95)
+        status_text.text("📊 Calculating statistics... (95%)")
         total_orders = len(df_orders)
         total_physical_items = len(df_physical) if not df_physical.empty else 0
         total_qty_ordered = df_orders['Qty'].sum() if 'Qty' in df_orders.columns else 0
         total_qty_physical = df_physical['Qty'].sum() if not df_physical.empty and 'Qty' in df_physical.columns else 0
+        
+        # Finalize progress (100%)
+        progress_bar.progress(1.0)
+        status_text.text("✅ Processing complete! (100%)")
+        
+        # Small delay to show completion, then clear progress indicators
+        time.sleep(0.5)
+        progress_bar.empty()
+        status_text.empty()
+        
+        # Set processing complete flag
+        st.session_state.processing_complete = True
         
         # Minimal success notification
         st.caption("✅ Packing plan generated")
@@ -1564,7 +1604,10 @@ def packing_plan_tool():
 
     with tab3:
         # Downloads Tab - Simple layout
-        if pdf_files and not df_physical.empty:
+        # Check if processing is complete before showing buttons
+        processing_complete = st.session_state.get('processing_complete', False)
+        
+        if pdf_files and not df_physical.empty and processing_complete:
             # Generate unique key suffix from data
             pdf_key_suffix = get_unique_key_suffix(df_physical)
             
@@ -1603,12 +1646,19 @@ def packing_plan_tool():
                     key=f"download_sorted_pdf_{sorted_pdf_key_suffix}",
                     use_container_width=True
                 )
+        elif pdf_files and not processing_complete:
+            # Show loading state during processing
+            st.info("⏳ Processing files... Please wait for processing to complete.")
+            st.progress(0.5)  # Show indeterminate progress
         else:
             st.info("Please upload invoice PDFs to generate downloads.")
 
     with tab4:
         # Labels Tab - Minimal layout
-        if pdf_files and not df_physical.empty:
+        # Check if processing is complete before showing buttons
+        processing_complete = st.session_state.get('processing_complete', False)
+        
+        if pdf_files and not df_physical.empty and processing_complete:
             # Check if "Packet used" column exists
             if "Packet used" not in df_physical.columns:
                 st.warning("'Packet used' column not found")
@@ -1869,6 +1919,10 @@ def packing_plan_tool():
                 except Exception as e:
                     logger.error(f"Error in product labels section: {str(e)}")
                     st.warning(f"⚠️ Error processing product labels: {str(e)}")
+        elif pdf_files and not processing_complete:
+            # Show loading state during processing
+            st.info("⏳ Processing files... Please wait for processing to complete.")
+            st.progress(0.5)  # Show indeterminate progress
         else:
             if pdf_files:
                 st.info("ℹ️ No physical packing plan available for label generation.")
