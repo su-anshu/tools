@@ -17,11 +17,11 @@ if not os.path.exists(FONTS_DIR):
 
 class IngredientsAllergenLabel:
     def __init__(self):
-        # Label dimensions: 45mm x 25mm at 600 DPI
+        # Label dimensions: 45mm x 25mm at 300 DPI
         # Convert mm to points: 1mm = 2.834645669 points
         self.width_mm = 45
         self.height_mm = 21
-        self.dpi = 600
+        self.dpi = 400
         
         # Convert to points for ReportLab
         self.width = self.width_mm * 2.834645669

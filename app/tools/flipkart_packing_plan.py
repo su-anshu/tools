@@ -836,9 +836,9 @@ def crop_shipping_label(page):
             # FALLBACK METHOD: Use 300 DPI pixmap for high quality
             # Only used if vector method fails
             try:
-                # Calculate matrix for 300 DPI (high quality)
-                # Default is 72 DPI, so 300/72 = 4.167 scaling factor
-                dpi_scale = 300.0 / 72.0
+                # Calculate matrix for 400 DPI (high quality)
+                # Default is 72 DPI, so 400/72 = 5.556 scaling factor
+                dpi_scale = 400.0 / 72.0
                 high_dpi_matrix = fitz.Matrix(dpi_scale, 0, 0, dpi_scale, 0, 0)
                 
                 # Get pixmap of the cropped region at 300 DPI
@@ -1520,6 +1520,10 @@ def flipkart_packing_plan_tool():
     
     # File info
     if pdf_files:
+        # Clear label generation completion flags to force regeneration
+        for key in list(st.session_state.keys()):
+            if key.startswith('flipkart_labels_generation_complete_'):
+                del st.session_state[key]
         total_size = sum(f.size for f in pdf_files)
         total_size_mb = total_size / (1024 * 1024)
         file_count = len(pdf_files)
@@ -2086,110 +2090,119 @@ def flipkart_packing_plan_tool():
                     logger.warning(f"Could not create selective hash: {e}")
                     data_hash = hashlib.md5(pd.util.hash_pandas_object(df_physical).values.tobytes()).hexdigest()
                 
-                # Check if labels already generated
-                if 'flipkart_label_cache_hash' not in st.session_state or st.session_state.flipkart_label_cache_hash != data_hash:
-                    with st.spinner("🔄 Generating labels..."):
+                # Check if ALL labels are generated (unified generation phase)
+                labels_complete_key = f'flipkart_labels_generation_complete_{data_hash}'
+                
+                if not st.session_state.get(labels_complete_key, False):
+                    # Generate ALL labels in one phase before showing any buttons
+                    with st.spinner("🔄 Generating all labels... Please wait for all buttons to appear."):
                         try:
+                            # Step 1: Generate sticker + house labels
                             sticker_buffer, house_buffer, sticker_count, house_count, skipped_products = generate_labels_by_packet_used_flipkart(
                                 df_physical, master_df, nutrition_df
                             )
                             
-                            # Store in session state
+                            # Step 2: Generate 4x6 vertical format (if house labels exist)
+                            house_4x6_vertical_buffer = None
+                            house_4x6_vertical_cache_key = f'flipkart_house_4x6_vertical_buffer_{data_hash}'
+                            if house_buffer and house_count > 0:
+                                try:
+                                    logger.info(f"Generating vertical 4x6 format for {house_count} labels...")
+                                    house_4x6_vertical_buffer = reformat_labels_to_4x6_vertical(house_buffer)
+                                    if house_4x6_vertical_buffer:
+                                        logger.info(f"Successfully generated vertical 4x6 format")
+                                    else:
+                                        logger.warning("reformat_labels_to_4x6_vertical returned None")
+                                except Exception as e:
+                                    logger.error(f"Error generating vertical 4x6 format: {str(e)}")
+                                    import traceback
+                                    error_trace = traceback.format_exc()
+                                    logger.error(error_trace)
+                                    house_4x6_vertical_buffer = None
+                            
+                            # Store ALL results in session state
                             st.session_state.flipkart_label_cache_hash = data_hash
                             st.session_state.flipkart_sticker_buffer = sticker_buffer
                             st.session_state.flipkart_house_buffer = house_buffer
                             st.session_state.flipkart_sticker_count = sticker_count
                             st.session_state.flipkart_house_count = house_count
                             st.session_state.flipkart_skipped_products = skipped_products
+                            st.session_state[house_4x6_vertical_cache_key] = house_4x6_vertical_buffer
+                            
+                            # Mark as complete ONLY after everything is done
+                            st.session_state[labels_complete_key] = True
+                            
+                            logger.info(f"All Flipkart labels generated and cached. Hash: {data_hash[:8]}...")
                         except Exception as e:
                             logger.error(f"Error generating labels: {str(e)}")
                             st.error(f"❌ **Label Generation Error**: {str(e)}")
+                            # Set empty values and mark as complete to prevent infinite retry
                             st.session_state.flipkart_label_cache_hash = data_hash
                             st.session_state.flipkart_sticker_buffer = BytesIO()
                             st.session_state.flipkart_house_buffer = BytesIO()
                             st.session_state.flipkart_sticker_count = 0
                             st.session_state.flipkart_house_count = 0
                             st.session_state.flipkart_skipped_products = []
+                            st.session_state[labels_complete_key] = True  # Mark complete even on error to prevent retry loop
                 else:
+                    # Use cached values
+                    logger.info(f"Using cached Flipkart labels. Hash: {data_hash[:8]}...")
                     sticker_buffer = st.session_state.flipkart_sticker_buffer
                     house_buffer = st.session_state.flipkart_house_buffer
                     sticker_count = st.session_state.flipkart_sticker_count
                     house_count = st.session_state.flipkart_house_count
                     skipped_products = st.session_state.flipkart_skipped_products
                 
-                # Display results and download buttons
-                sticker_key_suffix = data_hash[:8]
-                house_key_suffix = data_hash[:8]
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    if sticker_buffer and sticker_count > 0:
-                        st.metric("Sticker Labels", sticker_count)
-                        st.download_button(
-                            f"Download ({sticker_count})",
-                            data=sticker_buffer,
-                            file_name=f"Flipkart_Sticker_Labels_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                            mime="application/pdf",
-                            key=f"download_sticker_labels_{sticker_key_suffix}",
-                            use_container_width=True
-                        )
-                    else:
-                        st.caption("No Sticker labels")
-                
-                with col2:
-                    if house_buffer and house_count > 0:
-                        st.metric("House Labels", house_count)
-                        st.download_button(
-                            f"Download ({house_count})",
-                            data=house_buffer,
-                            file_name=f"Flipkart_House_Labels_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                            mime="application/pdf",
-                            key=f"download_house_labels_{house_key_suffix}",
-                            use_container_width=True
-                        )
-                        
-                        # House in 4x6 inch format (Vertical - top/bottom with rotation)
-                        # Check if reformatted vertical version is cached
-                        house_4x6_vertical_cache_key = f'flipkart_house_4x6_vertical_buffer_{data_hash}'
-                        
-                        # Always try to generate/retrieve the vertical format
-                        house_4x6_vertical_buffer = None
-                        if house_4x6_vertical_cache_key in st.session_state:
-                            house_4x6_vertical_buffer = st.session_state[house_4x6_vertical_cache_key]
-                        
-                        # If not cached or None, generate it
-                        if house_4x6_vertical_buffer is None:
-                            try:
-                                logger.info(f"Generating vertical 4x6 format for {house_count} labels...")
-                                house_4x6_vertical_buffer = reformat_labels_to_4x6_vertical(house_buffer)
-                                if house_4x6_vertical_buffer:
-                                    st.session_state[house_4x6_vertical_cache_key] = house_4x6_vertical_buffer
-                                    logger.info(f"Successfully generated vertical 4x6 format, cached with key: {house_4x6_vertical_cache_key}")
-                                else:
-                                    st.session_state[house_4x6_vertical_cache_key] = None
-                                    logger.warning("reformat_labels_to_4x6_vertical returned None")
-                                    st.warning("⚠️ Could not generate vertical 4x6 format. The function returned None.")
-                            except Exception as e:
-                                logger.error(f"Error generating vertical 4x6 format: {str(e)}")
-                                import traceback
-                                error_trace = traceback.format_exc()
-                                logger.error(error_trace)
-                                st.session_state[house_4x6_vertical_cache_key] = None
-                                st.error(f"⚠️ Error generating vertical 4x6 format: {str(e)}")
-                        
-                        # Show button if we have a valid buffer
-                        if house_4x6_vertical_buffer:
+                # Only show buttons if ALL label generation is complete
+                if st.session_state.get(labels_complete_key, False):
+                    # Display ALL buttons together - all labels are ready
+                    sticker_key_suffix = data_hash[:8]
+                    house_key_suffix = data_hash[:8]
+                    
+                    # Retrieve cached 4x6 vertical buffer
+                    house_4x6_vertical_cache_key = f'flipkart_house_4x6_vertical_buffer_{data_hash}'
+                    house_4x6_vertical_buffer = st.session_state.get(house_4x6_vertical_cache_key)
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if sticker_buffer and sticker_count > 0:
+                            st.metric("Sticker Labels", sticker_count)
                             st.download_button(
-                                "House in 4x6inch (Vertical)",
-                                data=house_4x6_vertical_buffer,
-                                file_name=f"Flipkart_House_Labels_4x6_Vertical_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                f"Download ({sticker_count})",
+                                data=sticker_buffer,
+                                file_name=f"Flipkart_Sticker_Labels_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                                 mime="application/pdf",
-                                key=f"download_house_4x6_vertical_{house_key_suffix}",
+                                key=f"download_sticker_labels_{sticker_key_suffix}",
                                 use_container_width=True
                             )
-                    else:
-                        st.caption("No House labels")
+                        else:
+                            st.caption("No Sticker labels")
+                    
+                    with col2:
+                        if house_buffer and house_count > 0:
+                            st.metric("House Labels", house_count)
+                            st.download_button(
+                                f"Download ({house_count})",
+                                data=house_buffer,
+                                file_name=f"Flipkart_House_Labels_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                mime="application/pdf",
+                                key=f"download_house_labels_{house_key_suffix}",
+                                use_container_width=True
+                            )
+                            
+                            # House in 4x6 inch format (Vertical - already generated)
+                            if house_4x6_vertical_buffer:
+                                st.download_button(
+                                    "House in 4x6inch (Vertical)",
+                                    data=house_4x6_vertical_buffer,
+                                    file_name=f"Flipkart_House_Labels_4x6_Vertical_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                    mime="application/pdf",
+                                    key=f"download_house_4x6_vertical_{house_key_suffix}",
+                                    use_container_width=True
+                                )
+                        else:
+                            st.caption("No House labels")
                 
                 # Show skipped products if any
                 if skipped_products:

@@ -17,11 +17,11 @@ if not os.path.exists(FONTS_DIR):
 
 class NutritionLabel:
     def __init__(self):
-        # Small label dimensions: 45mm x 35mm at 600 DPI
+        # Small label dimensions: 45mm x 35mm at 300 DPI
         # Convert mm to points: 1mm = 2.834645669 points
         self.width_mm = 45
         self.height_mm = 33
-        self.dpi = 600
+        self.dpi = 400
         
         # Convert to points for ReportLab
         self.width = self.width_mm * 2.834645669

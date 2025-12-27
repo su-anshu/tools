@@ -268,7 +268,7 @@ def generate_fnsku_barcode_direct(fnsku_code, width_mm=48, height_mm=25):
 
             'foreground': 'black',
 
-            'dpi': 600            # High DPI for crisp barcodes (optimized from 1200)
+            'dpi': 400            # High DPI for crisp barcodes (optimized from 1200)
 
         }
 
@@ -312,7 +312,7 @@ def generate_fnsku_barcode_direct(fnsku_code, width_mm=48, height_mm=25):
 
         # Create a properly sized canvas with HIGH RESOLUTION for crisp barcodes
 
-        dpi = 600  # High DPI for crisp barcodes (optimized from 1200)
+        dpi = 400  # High DPI for crisp barcodes (optimized from 1200)
 
         canvas_width_px = int((width_mm / 25.4) * dpi * 0.85)    # 85% canvas - less white space
 
@@ -366,7 +366,7 @@ def generate_fnsku_barcode_direct(fnsku_code, width_mm=48, height_mm=25):
 
         img_buffer = BytesIO()
 
-        final_img.save(img_buffer, format='PNG', dpi=(600, 600), optimize=False)
+        final_img.save(img_buffer, format='PNG', dpi=(400, 400), optimize=False)
 
         img_buffer.seek(0)
 
@@ -716,7 +716,7 @@ def generate_combined_label_pdf(mrp_df, fnsku_code, barcode_pdf_path):
 
                         if fnsku_code in page_text:
 
-                            barcode_pix = page.get_pixmap(dpi=600)
+                            barcode_pix = page.get_pixmap(dpi=400)
 
                             break
 
@@ -748,7 +748,7 @@ def generate_combined_label_pdf(mrp_df, fnsku_code, barcode_pdf_path):
 
             with safe_pdf_context(mrp_label_buffer.read()) as mrp_pdf:
 
-                mrp_pix = mrp_pdf[0].get_pixmap(dpi=600)
+                mrp_pix = mrp_pdf[0].get_pixmap(dpi=400)
 
             
 
@@ -868,7 +868,7 @@ def generate_combined_label_vertical_pdf(mrp_df, fnsku_code, barcode_pdf_path):
 
                         if fnsku_code in page_text:
 
-                            barcode_pix = page.get_pixmap(dpi=600)
+                            barcode_pix = page.get_pixmap(dpi=400)
 
                             break
 
@@ -900,7 +900,7 @@ def generate_combined_label_vertical_pdf(mrp_df, fnsku_code, barcode_pdf_path):
 
             with safe_pdf_context(mrp_label_buffer.read()) as mrp_pdf:
 
-                mrp_pix = mrp_pdf[0].get_pixmap(dpi=600)
+                mrp_pix = mrp_pdf[0].get_pixmap(dpi=400)
 
             
 
@@ -1012,13 +1012,13 @@ def generate_combined_label_pdf_direct(mrp_df, fnsku_code):
 
             with safe_pdf_context(mrp_label_buffer.read()) as mrp_pdf:
 
-                mrp_pix = mrp_pdf[0].get_pixmap(dpi=600)
+                mrp_pix = mrp_pdf[0].get_pixmap(dpi=400)
 
             
 
             with safe_pdf_context(barcode_buffer.read()) as barcode_pdf:
 
-                barcode_pix = barcode_pdf[0].get_pixmap(dpi=600)
+                barcode_pix = barcode_pdf[0].get_pixmap(dpi=400)
 
             
 
@@ -1124,13 +1124,13 @@ def generate_combined_label_vertical_pdf_direct(mrp_df, fnsku_code):
 
             with safe_pdf_context(mrp_label_buffer.read()) as mrp_pdf:
 
-                mrp_pix = mrp_pdf[0].get_pixmap(dpi=600)
+                mrp_pix = mrp_pdf[0].get_pixmap(dpi=400)
 
             
 
             with safe_pdf_context(barcode_buffer.read()) as barcode_pdf:
 
-                barcode_pix = barcode_pdf[0].get_pixmap(dpi=600)
+                barcode_pix = barcode_pdf[0].get_pixmap(dpi=400)
 
             
 
@@ -1186,7 +1186,7 @@ def generate_combined_label_vertical_pdf_direct(mrp_df, fnsku_code):
 
 
 
-def pdf_to_image(pdf_bytes, dpi=600):
+def pdf_to_image(pdf_bytes, dpi=400):
 
     """Convert PDF bytes to PIL Image"""
 
@@ -1206,7 +1206,7 @@ def pdf_to_image(pdf_bytes, dpi=600):
 
 
 
-def resize_section_to_50mm_width(img, target_height_mm, dpi=600):
+def resize_section_to_50mm_width(img, target_height_mm, dpi=400):
 
     """Resize section image to 50mm width with target height"""
 
@@ -1528,7 +1528,7 @@ def reformat_labels_to_4x6_vertical(house_buffer):
                 try:
                     # Convert page to image
                     page = src_doc[i]
-                    pix = page.get_pixmap(dpi=600)
+                    pix = page.get_pixmap(dpi=400)
                     img = Image.open(BytesIO(pix.tobytes("png")))
                     
                     # Rotate 90° clockwise (-90 degrees)
@@ -1554,7 +1554,7 @@ def reformat_labels_to_4x6_vertical(house_buffer):
                 
                 # Convert rotated image to format for ReportLab
                 img_buffer_top = BytesIO()
-                rotated_images[i].save(img_buffer_top, format='PNG', dpi=(600, 600))
+                rotated_images[i].save(img_buffer_top, format='PNG', dpi=(400, 400))
                 img_buffer_top.seek(0)
                 
                 c.drawImage(ImageReader(img_buffer_top), x_top, y_top, width=draw_w, height=draw_h)
@@ -1566,7 +1566,7 @@ def reformat_labels_to_4x6_vertical(house_buffer):
                     
                     # Convert rotated image to format for ReportLab
                     img_buffer_middle = BytesIO()
-                    rotated_images[i + 1].save(img_buffer_middle, format='PNG', dpi=(600, 600))
+                    rotated_images[i + 1].save(img_buffer_middle, format='PNG', dpi=(400, 400))
                     img_buffer_middle.seek(0)
                     
                     c.drawImage(ImageReader(img_buffer_middle), x_middle, y_middle, width=draw_w, height=draw_h)
@@ -1578,7 +1578,7 @@ def reformat_labels_to_4x6_vertical(house_buffer):
                     
                     # Convert rotated image to format for ReportLab
                     img_buffer_bottom = BytesIO()
-                    rotated_images[i + 2].save(img_buffer_bottom, format='PNG', dpi=(600, 600))
+                    rotated_images[i + 2].save(img_buffer_bottom, format='PNG', dpi=(400, 400))
                     img_buffer_bottom.seek(0)
                     
                     c.drawImage(ImageReader(img_buffer_bottom), x_bottom, y_bottom, width=draw_w, height=draw_h)
@@ -1709,13 +1709,13 @@ def generate_combined_label_pdf_direct(mrp_df, fnsku_code):
 
             with safe_pdf_context(mrp_label_buffer.read()) as mrp_pdf:
 
-                mrp_pix = mrp_pdf[0].get_pixmap(dpi=600)
+                mrp_pix = mrp_pdf[0].get_pixmap(dpi=400)
 
             
 
             with safe_pdf_context(barcode_buffer.read()) as barcode_pdf:
 
-                barcode_pix = barcode_pdf[0].get_pixmap(dpi=600)
+                barcode_pix = barcode_pdf[0].get_pixmap(dpi=400)
 
             
 
@@ -1821,13 +1821,13 @@ def generate_combined_label_vertical_pdf_direct(mrp_df, fnsku_code):
 
             with safe_pdf_context(mrp_label_buffer.read()) as mrp_pdf:
 
-                mrp_pix = mrp_pdf[0].get_pixmap(dpi=600)
+                mrp_pix = mrp_pdf[0].get_pixmap(dpi=400)
 
             
 
             with safe_pdf_context(barcode_buffer.read()) as barcode_pdf:
 
-                barcode_pix = barcode_pdf[0].get_pixmap(dpi=600)
+                barcode_pix = barcode_pdf[0].get_pixmap(dpi=400)
 
             
 

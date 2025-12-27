@@ -1248,6 +1248,10 @@ def packing_plan_tool():
     if pdf_files:
         # Reset processing state when new files are uploaded
         st.session_state.processing_complete = False
+        # Clear label generation completion flags to force regeneration
+        for key in list(st.session_state.keys()):
+            if key.startswith('labels_generation_complete_'):
+                del st.session_state[key]
         logger.info(f"Processing {len(pdf_files)} PDF files")
         
         # Phase 1: Enhanced input validation
@@ -1773,187 +1777,56 @@ def packing_plan_tool():
                     logger.warning(f"Could not create selective hash, using full dataframe: {e}")
                     data_hash = hashlib.md5(pd.util.hash_pandas_object(df_physical).values.tobytes()).hexdigest()
                 
-                # Check if labels already generated for this data
-                if 'label_cache_hash' not in st.session_state or st.session_state.label_cache_hash != data_hash:
-                    # Generate labels (without progress callback to prevent reruns)
-                    with st.spinner("🔄 Generating labels..."):
+                # Check if ALL labels are generated (unified generation phase)
+                labels_complete_key = f'labels_generation_complete_{data_hash}'
+                
+                if not st.session_state.get(labels_complete_key, False):
+                    # Generate ALL labels in one phase before showing any buttons
+                    with st.spinner("🔄 Generating all labels... Please wait for all buttons to appear."):
                         try:
+                            # Step 1: Generate sticker + house labels
                             sticker_buffer, house_buffer, sticker_count, house_count, skipped_products = generate_labels_by_packet_used(
                                 df_physical, master_df, nutrition_df, progress_callback=None
                             )
                             
-                            # Store in session state
-                            st.session_state.label_cache_hash = data_hash
-                            st.session_state.sticker_buffer = sticker_buffer
-                            st.session_state.house_buffer = house_buffer
-                            st.session_state.sticker_count = sticker_count
-                            st.session_state.house_count = house_count
-                            st.session_state.skipped_products = skipped_products
-                            
-                            logger.info(f"Labels generated and cached. Hash: {data_hash[:8]}...")
-                        except Exception as e:
-                            error_msg = f"Error generating labels: {str(e)}"
-                            logger.error(error_msg)
-                            st.error(f"❌ **Label Generation Error**: {str(e)}")
-                            st.info("💡 **Troubleshooting**: Check that products have valid FNSKU codes and 'Packet used' values in the master sheet.")
-                            # Set empty values to prevent retry loop
-                            st.session_state.label_cache_hash = data_hash
-                            st.session_state.sticker_buffer = BytesIO()
-                            st.session_state.house_buffer = BytesIO()
-                            st.session_state.sticker_count = 0
-                            st.session_state.house_count = 0
-                            st.session_state.skipped_products = []
-                else:
-                    # Use cached values
-                    logger.info(f"Using cached labels. Hash: {data_hash[:8]}...")
-                    sticker_buffer = st.session_state.sticker_buffer
-                    house_buffer = st.session_state.house_buffer
-                    sticker_count = st.session_state.sticker_count
-                    house_count = st.session_state.house_count
-                    skipped_products = st.session_state.skipped_products
-                
-                # Display results and download buttons
-                # IMPORTANT: All labels from all uploaded PDFs are combined into single PDF files
-                try:
-                    # Generate unique key suffixes from label data hash (data_hash is in scope here)
-                    sticker_key_suffix = data_hash[:8]
-                    house_key_suffix = data_hash[:8]
-                    
-                    # Simple label download buttons
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        if sticker_buffer and sticker_count > 0:
-                            st.metric("Sticker Labels", sticker_count)
-                            st.download_button(
-                                f"Download ({sticker_count})",
-                                data=sticker_buffer,
-                                file_name=f"Sticker_Labels_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                                mime="application/pdf",
-                                key=f"download_sticker_labels_{sticker_key_suffix}",
-                                use_container_width=True
-                            )
-                        else:
-                            st.caption("No Sticker labels")
-                    
-                    with col2:
-                        if house_buffer and house_count > 0:
-                            st.metric("House Labels", house_count)
-                            st.download_button(
-                                f"Download ({house_count})",
-                                data=house_buffer,
-                                file_name=f"House_Labels_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                                mime="application/pdf",
-                                key=f"download_house_labels_{house_key_suffix}",
-                                use_container_width=True
-                            )
-                            
-                            # House in 4x6 inch format (COMMENTED OUT - only keeping vertical version)
-                            # # Check if reformatted version is cached
-                            # house_4x6_cache_key = f'house_4x6_buffer_{data_hash}'
-                            # if house_4x6_cache_key not in st.session_state:
-                            #     # Generate reformatted version
-                            #     house_4x6_buffer = reformat_house_labels_to_4x6(house_buffer)
-                            #     if house_4x6_buffer:
-                            #         st.session_state[house_4x6_cache_key] = house_4x6_buffer
-                            #     else:
-                            #         st.session_state[house_4x6_cache_key] = None
-                            # 
-                            # house_4x6_buffer = st.session_state.get(house_4x6_cache_key)
-                            # if house_4x6_buffer:
-                            #     st.download_button(
-                            #         "House in 4x6inch",
-                            #         data=house_4x6_buffer,
-                            #         file_name=f"House_Labels_4x6_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                            #         mime="application/pdf",
-                            #         key=f"download_house_4x6_{house_key_suffix}",
-                            #         use_container_width=True
-                            #     )
-                            
-                            # House in 4x6 inch format (Vertical - top/bottom with rotation)
-                            # Check if reformatted vertical version is cached
-                            house_4x6_vertical_cache_key = f'house_4x6_vertical_buffer_{data_hash}'
-                            
-                            # Always try to generate/retrieve the vertical format
+                            # Step 2: Generate 4x6 vertical format (if house labels exist)
                             house_4x6_vertical_buffer = None
-                            if house_4x6_vertical_cache_key in st.session_state:
-                                house_4x6_vertical_buffer = st.session_state[house_4x6_vertical_cache_key]
-                            
-                            # If not cached or None, generate it
-                            if house_4x6_vertical_buffer is None:
+                            house_4x6_vertical_cache_key = f'house_4x6_vertical_buffer_{data_hash}'
+                            if house_buffer and house_count > 0:
                                 try:
                                     logger.info(f"Generating vertical 4x6 format for {house_count} labels...")
                                     house_4x6_vertical_buffer = reformat_labels_to_4x6_vertical(house_buffer)
                                     if house_4x6_vertical_buffer:
-                                        st.session_state[house_4x6_vertical_cache_key] = house_4x6_vertical_buffer
-                                        logger.info(f"Successfully generated vertical 4x6 format, cached with key: {house_4x6_vertical_cache_key}")
+                                        logger.info(f"Successfully generated vertical 4x6 format")
                                     else:
-                                        st.session_state[house_4x6_vertical_cache_key] = None
                                         logger.warning("reformat_labels_to_4x6_vertical returned None")
-                                        st.warning("⚠️ Could not generate vertical 4x6 format. The function returned None.")
                                 except Exception as e:
                                     logger.error(f"Error generating vertical 4x6 format: {str(e)}")
                                     import traceback
                                     error_trace = traceback.format_exc()
                                     logger.error(error_trace)
-                                    st.session_state[house_4x6_vertical_cache_key] = None
-                                    st.error(f"⚠️ Error generating vertical 4x6 format: {str(e)}")
+                                    house_4x6_vertical_buffer = None
                             
-                            # Show button if we have a valid buffer
-                            if house_4x6_vertical_buffer:
-                                st.download_button(
-                                    "House in 4x6inch (Vertical)",
-                                    data=house_4x6_vertical_buffer,
-                                    file_name=f"House_Labels_4x6_Vertical_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                                    mime="application/pdf",
-                                    key=f"download_house_4x6_vertical_{house_key_suffix}",
-                                    use_container_width=True
-                                )
-                        else:
-                            st.caption("No House labels")
-                    
-                    # Show skipped products if any
-                    if skipped_products:
-                        with st.expander("⚠️ Products Skipped from Label Generation", expanded=False):
-                            skipped_df = pd.DataFrame(skipped_products)
-                            st.dataframe(skipped_df, use_container_width=True)
-                            st.caption(f"Total skipped: {len(skipped_products)} products")
-                        
-                except Exception as e:
-                    # Phase 0: Better error messages
-                    error_msg = f"Error displaying labels: {str(e)}"
-                    logger.error(error_msg)
-                    st.error(f"❌ **Error Displaying Labels**: {str(e)}")
-                
-                # Product Labels Section (96x25mm - two labels side by side)
-                # This section is outside the try-except to ensure it always shows
-                st.markdown("---")
-                st.markdown("**Product Labels (96x25mm)**")
-                
-                # Extract unique product names from sticker and house labels
-                try:
-                    sticker_house_products = df_physical[
-                        df_physical["Packet used"].astype(str).str.strip().str.lower().isin(["sticker", "house"])
-                    ]
-                    
-                    if not sticker_house_products.empty:
-                        # Filter out rows with invalid product names
-                        sticker_house_products = sticker_house_products[
-                            sticker_house_products["item"].notna() & 
-                            (sticker_house_products["item"].astype(str).str.strip() != "") &
-                            (sticker_house_products["item"].astype(str).str.strip().str.lower() != "nan")
-                        ]
-                        
-                        if not sticker_house_products.empty:
-                            # Check if product labels already generated for this data
+                            # Step 3: Generate product labels (if applicable)
+                            product_label_bytes_without_date = b''
+                            product_label_count = 0
                             product_label_cache_key = f'product_label_cache_{data_hash}'
                             
-                            if product_label_cache_key not in st.session_state or st.session_state.get(f'{product_label_cache_key}_hash') != data_hash:
-                                # Generate product labels
-                                with st.spinner("🔄 Generating product labels..."):
+                            sticker_house_products = df_physical[
+                                df_physical["Packet used"].astype(str).str.strip().str.lower().isin(["sticker", "house"])
+                            ]
+                            
+                            if not sticker_house_products.empty:
+                                # Filter out rows with invalid product names
+                                sticker_house_products = sticker_house_products[
+                                    sticker_house_products["item"].notna() & 
+                                    (sticker_house_products["item"].astype(str).str.strip() != "") &
+                                    (sticker_house_products["item"].astype(str).str.strip().str.lower() != "nan")
+                                ]
+                                
+                                if not sticker_house_products.empty:
                                     try:
                                         # Create combined PDFs for product labels
-                                        product_labels_with_date = fitz.open()
                                         product_labels_without_date = fitz.open()
                                         
                                         # Create a flat list of all product names (repeated by quantity)
@@ -1983,12 +1856,6 @@ def packing_plan_tool():
                                                 product1 = product_list[i]
                                                 product2 = product_list[i + 1] if i + 1 < len(product_list) else None
                                                 
-                                                # Generate label with date (96x25mm - two labels side by side)
-                                                label_pdf_bytes_with_date = create_pair_label_pdf(product1, product2, include_date=True)
-                                                if label_pdf_bytes_with_date:
-                                                    with safe_pdf_context(label_pdf_bytes_with_date) as label_doc:
-                                                        product_labels_with_date.insert_pdf(label_doc)
-                                                
                                                 # Generate label without date (96x25mm - two labels side by side)
                                                 label_pdf_bytes_without_date = create_pair_label_pdf(product1, product2, include_date=False)
                                                 if label_pdf_bytes_without_date:
@@ -1997,81 +1864,155 @@ def packing_plan_tool():
                                             except Exception as e:
                                                 logger.warning(f"Could not generate product label pair: {e}")
                                         
-                                        # Save to buffers
-                                        product_label_buffer_with_date = BytesIO()
+                                        # Save to buffer
                                         product_label_buffer_without_date = BytesIO()
-                                        
-                                        if len(product_labels_with_date) > 0:
-                                            product_labels_with_date.save(product_label_buffer_with_date)
-                                            product_label_buffer_with_date.seek(0)
-                                            # Store bytes for reliable downloads
-                                            product_label_bytes_with_date = product_label_buffer_with_date.getvalue()
-                                        else:
-                                            product_label_bytes_with_date = b''
                                         
                                         if len(product_labels_without_date) > 0:
                                             product_labels_without_date.save(product_label_buffer_without_date)
                                             product_label_buffer_without_date.seek(0)
                                             # Store bytes for reliable downloads
                                             product_label_bytes_without_date = product_label_buffer_without_date.getvalue()
-                                        else:
-                                            product_label_bytes_without_date = b''
+                                            product_label_count = int(sticker_house_products['Qty'].sum()) if 'Qty' in sticker_house_products.columns else 0
                                         
-                                        product_labels_with_date.close()
                                         product_labels_without_date.close()
                                         
-                                        # Store in session state (store bytes for reliable downloads)
-                                        total_label_count = int(sticker_house_products['Qty'].sum()) if 'Qty' in sticker_house_products.columns else 0
-                                        st.session_state[product_label_cache_key] = {
-                                            'with_date': product_label_bytes_with_date,
-                                            'without_date': product_label_bytes_without_date,
-                                            'count': total_label_count
-                                        }
-                                        st.session_state[f'{product_label_cache_key}_hash'] = data_hash
-                                        
-                                        logger.info(f"Product labels generated: {total_label_count} total labels")
+                                        logger.info(f"Product labels generated: {product_label_count} total labels")
                                     except Exception as e:
                                         logger.error(f"Error generating product labels: {str(e)}")
-                                        st.error(f"❌ **Error Generating Product Labels**: {str(e)}")
-                                        # Set empty values
-                                        st.session_state[product_label_cache_key] = {
-                                            'with_date': b'',
-                                            'without_date': b'',
-                                            'count': 0
-                                        }
-                                        st.session_state[f'{product_label_cache_key}_hash'] = data_hash
+                                        product_label_bytes_without_date = b''
+                                        product_label_count = 0
+                            
+                            # Store ALL results in session state
+                            st.session_state.label_cache_hash = data_hash
+                            st.session_state.sticker_buffer = sticker_buffer
+                            st.session_state.house_buffer = house_buffer
+                            st.session_state.sticker_count = sticker_count
+                            st.session_state.house_count = house_count
+                            st.session_state.skipped_products = skipped_products
+                            st.session_state[house_4x6_vertical_cache_key] = house_4x6_vertical_buffer
+                            st.session_state[product_label_cache_key] = {
+                                'without_date': product_label_bytes_without_date,
+                                'count': product_label_count
+                            }
+                            st.session_state[f'{product_label_cache_key}_hash'] = data_hash
+                            
+                            # Mark as complete ONLY after everything is done
+                            st.session_state[labels_complete_key] = True
+                            
+                            logger.info(f"All labels generated and cached. Hash: {data_hash[:8]}...")
+                        except Exception as e:
+                            error_msg = f"Error generating labels: {str(e)}"
+                            logger.error(error_msg)
+                            st.error(f"❌ **Label Generation Error**: {str(e)}")
+                            st.info("💡 **Troubleshooting**: Check that products have valid FNSKU codes and 'Packet used' values in the master sheet.")
+                            # Set empty values and mark as complete to prevent infinite retry
+                            st.session_state.label_cache_hash = data_hash
+                            st.session_state.sticker_buffer = BytesIO()
+                            st.session_state.house_buffer = BytesIO()
+                            st.session_state.sticker_count = 0
+                            st.session_state.house_count = 0
+                            st.session_state.skipped_products = []
+                            st.session_state[labels_complete_key] = True  # Mark complete even on error to prevent retry loop
+                else:
+                    # Use cached values
+                    logger.info(f"Using cached labels. Hash: {data_hash[:8]}...")
+                    sticker_buffer = st.session_state.sticker_buffer
+                    house_buffer = st.session_state.house_buffer
+                    sticker_count = st.session_state.sticker_count
+                    house_count = st.session_state.house_count
+                    skipped_products = st.session_state.skipped_products
+                
+                # Only show buttons if ALL label generation is complete
+                labels_complete_key = f'labels_generation_complete_{data_hash}'
+                if st.session_state.get(labels_complete_key, False):
+                    # Display ALL buttons together - all labels are ready
+                    # IMPORTANT: All labels from all uploaded PDFs are combined into single PDF files
+                    try:
+                        # Generate unique key suffixes from label data hash
+                        sticker_key_suffix = data_hash[:8]
+                        house_key_suffix = data_hash[:8]
+                        
+                        # Retrieve cached values
+                        house_4x6_vertical_cache_key = f'house_4x6_vertical_buffer_{data_hash}'
+                        house_4x6_vertical_buffer = st.session_state.get(house_4x6_vertical_cache_key)
+                        product_label_cache_key = f'product_label_cache_{data_hash}'
+                        product_label_data = st.session_state.get(product_label_cache_key, {})
+                        product_label_bytes_without_date = product_label_data.get('without_date', b'')
+                        product_label_count = product_label_data.get('count', 0)
+                        
+                        # Simple label download buttons
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            if sticker_buffer and sticker_count > 0:
+                                st.metric("Sticker Labels", sticker_count)
+                                st.download_button(
+                                    f"Download ({sticker_count})",
+                                    data=sticker_buffer,
+                                    file_name=f"Sticker_Labels_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                    mime="application/pdf",
+                                    key=f"download_sticker_labels_{sticker_key_suffix}",
+                                    use_container_width=True
+                                )
                             else:
-                                # Use cached values
-                                logger.info(f"Using cached product labels. Hash: {data_hash[:8]}...")
-                            
-                            # Display product label download buttons
-                            cached_labels = st.session_state.get(product_label_cache_key, {})
-                            total_label_count = cached_labels.get('count', int(sticker_house_products['Qty'].sum()) if 'Qty' in sticker_house_products.columns else 0)
-                            product_label_bytes_with_date = cached_labels.get('with_date', b'')
-                            product_label_bytes_without_date = cached_labels.get('without_date', b'')
-                            
-                            if total_label_count > 0:
-                                st.caption(f"Product labels: {total_label_count} total labels")
+                                st.caption("No Sticker labels")
+                        
+                        with col2:
+                            if house_buffer and house_count > 0:
+                                st.metric("House Labels", house_count)
+                                st.download_button(
+                                    f"Download ({house_count})",
+                                    data=house_buffer,
+                                    file_name=f"House_Labels_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                    mime="application/pdf",
+                                    key=f"download_house_labels_{house_key_suffix}",
+                                    use_container_width=True
+                                )
                                 
-                                # Display download button for labels without date only
-                                if product_label_bytes_without_date and len(product_label_bytes_without_date) > 0:
+                                # House in 4x6 inch format (Vertical - already generated)
+                                if house_4x6_vertical_buffer:
                                     st.download_button(
-                                        "📥 Download without Date",
-                                        data=product_label_bytes_without_date,
-                                        file_name=f"Product_Labels_No_Date_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                        "House in 4x6inch (Vertical)",
+                                        data=house_4x6_vertical_buffer,
+                                        file_name=f"House_Labels_4x6_Vertical_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                                         mime="application/pdf",
-                                        key=f"download_product_labels_no_date_{data_hash[:8]}",
+                                        key=f"download_house_4x6_vertical_{house_key_suffix}",
                                         use_container_width=True
                                     )
-                                else:
-                                    st.caption("No labels available")
-                        else:
-                            st.caption("No product names found for label generation")
-                    else:
-                        st.caption("No sticker or house products found for product label generation")
-                except Exception as e:
-                    logger.error(f"Error in product labels section: {str(e)}")
-                    st.warning(f"⚠️ Error processing product labels: {str(e)}")
+                            else:
+                                st.caption("No House labels")
+                        
+                        # Show skipped products if any
+                        if skipped_products:
+                            with st.expander("⚠️ Products Skipped from Label Generation", expanded=False):
+                                skipped_df = pd.DataFrame(skipped_products)
+                                st.dataframe(skipped_df, use_container_width=True)
+                                st.caption(f"Total skipped: {len(skipped_products)} products")
+                        
+                        # Product Labels Section (96x25mm - two labels side by side)
+                        if product_label_count > 0:
+                            st.markdown("---")
+                            st.markdown("**Product Labels (96x25mm)**")
+                            st.caption(f"Product labels: {product_label_count} total labels")
+                            
+                            # Display download button for labels without date only
+                            if product_label_bytes_without_date and len(product_label_bytes_without_date) > 0:
+                                st.download_button(
+                                    "📥 Download without Date",
+                                    data=product_label_bytes_without_date,
+                                    file_name=f"Product_Labels_No_Date_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                    mime="application/pdf",
+                                    key=f"download_product_labels_no_date_{data_hash[:8]}",
+                                    use_container_width=True
+                                )
+                            else:
+                                st.caption("No labels available")
+                        
+                    except Exception as e:
+                        # Better error messages
+                        error_msg = f"Error displaying labels: {str(e)}"
+                        logger.error(error_msg)
+                        st.error(f"❌ **Error Displaying Labels**: {str(e)}")
         elif pdf_files and not processing_complete:
             # Show loading state during processing
             st.info("⏳ Processing files... Please wait for processing to complete.")
