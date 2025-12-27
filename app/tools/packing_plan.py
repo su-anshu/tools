@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import fitz
 import re
+import math
 from fpdf import FPDF
 from io import BytesIO
 from collections import defaultdict
@@ -11,7 +12,7 @@ import logging
 import hashlib
 import time
 from app.sidebar import MASTER_FILE, BARCODE_PDF_PATH
-from app.tools.label_generator import generate_combined_label_pdf_direct, generate_pdf, generate_triple_label_combined
+from app.tools.label_generator import generate_combined_label_pdf_direct, generate_pdf, generate_triple_label_combined, reformat_labels_to_4x6_vertical
 from app.tools.product_label_generator import create_label_pdf, create_pair_label_pdf
 from app.utils import (
     is_empty_value, get_unique_key_suffix, setup_tool_ui, 
@@ -1146,6 +1147,96 @@ def packing_plan_tool():
         
         return sticker_buffer, house_buffer, sticker_count, house_count, skipped_products
 
+    def reformat_house_labels_to_4x6(house_buffer):
+        """
+        Reformat 100x150mm House labels into 4x6 inch PDFs with 2 labels side-by-side per page.
+        
+        Based on pdf-label-reformatter-utility logic:
+        - Input: 100mm × 150mm labels (one per page)
+        - Output: 4×6 inch pages with 2 labels side-by-side
+        
+        Args:
+            house_buffer: BytesIO buffer containing House labels (100mm × 150mm, one per page)
+        
+        Returns:
+            BytesIO buffer with reformatted 4x6 inch PDF, or None if error
+        """
+        try:
+            if house_buffer is None:
+                return None
+            
+            # Check if buffer has content
+            house_buffer.seek(0)
+            buffer_content = house_buffer.read()
+            if len(buffer_content) == 0:
+                return None
+            house_buffer.seek(0)
+            
+            # Open source PDF with House labels
+            with safe_pdf_context(buffer_content) as src_doc:
+                if len(src_doc) == 0:
+                    return None
+                
+                # Get first page dimensions (all labels should be same size: 100mm × 150mm)
+                first_page = src_doc[0]
+                sW, sH = first_page.rect.width, first_page.rect.height
+                
+                # 4x6 inch page dimensions in points (1 inch = 72 points)
+                PAGE_WIDTH = 4 * 72.0   # 288pt
+                PAGE_HEIGHT = 6 * 72.0  # 432pt
+                
+                # Margins and gap (matching pdf-label-reformatter-utility)
+                MARGIN_X = 4.0   # 4pt margin on left and right
+                MARGIN_Y = 1.0   # 1pt margin on top and bottom (reduced to maximize label size)
+                GAP_X = 4.0      # 4pt gap between labels
+                
+                # Calculate available space for labels
+                total_avail_w = PAGE_WIDTH - (2 * MARGIN_X) - GAP_X  # 288 - 8 - 4 = 276pt
+                slot_w = total_avail_w / 2.0  # 138pt per label slot
+                slot_h = PAGE_HEIGHT - (2 * MARGIN_Y)  # 432 - 2 = 430pt (with 1pt margins)
+                
+                # Calculate scale to fit label in slot (maintain aspect ratio)
+                scale = min(slot_w / sW, slot_h / sH)
+                draw_w = sW * scale
+                draw_h = sH * scale
+                
+                # Vertical centering position
+                y_pos = MARGIN_Y + (slot_h - draw_h) / 2.0
+                
+                # Create output PDF
+                out_doc = fitz.open()
+                total_pages = len(src_doc)
+                
+                # Process labels in pairs (2 per page)
+                for i in range(0, total_pages, 2):
+                    # Create new 4x6 inch page
+                    page = out_doc.new_page(width=PAGE_WIDTH, height=PAGE_HEIGHT)
+                    
+                    # Left Label
+                    x_left = MARGIN_X + (slot_w - draw_w) / 2.0
+                    rect_left = fitz.Rect(x_left, y_pos, x_left + draw_w, y_pos + draw_h)
+                    page.show_pdf_page(rect_left, src_doc, i)
+                    
+                    # Right Label (if exists)
+                    if i + 1 < total_pages:
+                        x_right = MARGIN_X + slot_w + GAP_X + (slot_w - draw_w) / 2.0
+                        rect_right = fitz.Rect(x_right, y_pos, x_right + draw_w, y_pos + draw_h)
+                        page.show_pdf_page(rect_right, src_doc, i + 1)
+                
+                # Save to buffer
+                output_buffer = BytesIO()
+                out_doc.save(output_buffer)
+                output_buffer.seek(0)
+                output_page_count = len(out_doc)
+                out_doc.close()
+                
+                logger.info(f"Reformatted {total_pages} House labels into {output_page_count} 4x6 inch pages")
+                return output_buffer
+                
+        except Exception as e:
+            logger.error(f"Error reformatting House labels to 4x6: {str(e)}")
+            return None
+
     # Initialize total_invoice_count and invoice_has_multi_qty at function scope level
     total_invoice_count = 0
     invoice_has_multi_qty = []
@@ -1756,6 +1847,68 @@ def packing_plan_tool():
                                 key=f"download_house_labels_{house_key_suffix}",
                                 use_container_width=True
                             )
+                            
+                            # House in 4x6 inch format (COMMENTED OUT - only keeping vertical version)
+                            # # Check if reformatted version is cached
+                            # house_4x6_cache_key = f'house_4x6_buffer_{data_hash}'
+                            # if house_4x6_cache_key not in st.session_state:
+                            #     # Generate reformatted version
+                            #     house_4x6_buffer = reformat_house_labels_to_4x6(house_buffer)
+                            #     if house_4x6_buffer:
+                            #         st.session_state[house_4x6_cache_key] = house_4x6_buffer
+                            #     else:
+                            #         st.session_state[house_4x6_cache_key] = None
+                            # 
+                            # house_4x6_buffer = st.session_state.get(house_4x6_cache_key)
+                            # if house_4x6_buffer:
+                            #     st.download_button(
+                            #         "House in 4x6inch",
+                            #         data=house_4x6_buffer,
+                            #         file_name=f"House_Labels_4x6_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                            #         mime="application/pdf",
+                            #         key=f"download_house_4x6_{house_key_suffix}",
+                            #         use_container_width=True
+                            #     )
+                            
+                            # House in 4x6 inch format (Vertical - top/bottom with rotation)
+                            # Check if reformatted vertical version is cached
+                            house_4x6_vertical_cache_key = f'house_4x6_vertical_buffer_{data_hash}'
+                            
+                            # Always try to generate/retrieve the vertical format
+                            house_4x6_vertical_buffer = None
+                            if house_4x6_vertical_cache_key in st.session_state:
+                                house_4x6_vertical_buffer = st.session_state[house_4x6_vertical_cache_key]
+                            
+                            # If not cached or None, generate it
+                            if house_4x6_vertical_buffer is None:
+                                try:
+                                    logger.info(f"Generating vertical 4x6 format for {house_count} labels...")
+                                    house_4x6_vertical_buffer = reformat_labels_to_4x6_vertical(house_buffer)
+                                    if house_4x6_vertical_buffer:
+                                        st.session_state[house_4x6_vertical_cache_key] = house_4x6_vertical_buffer
+                                        logger.info(f"Successfully generated vertical 4x6 format, cached with key: {house_4x6_vertical_cache_key}")
+                                    else:
+                                        st.session_state[house_4x6_vertical_cache_key] = None
+                                        logger.warning("reformat_labels_to_4x6_vertical returned None")
+                                        st.warning("⚠️ Could not generate vertical 4x6 format. The function returned None.")
+                                except Exception as e:
+                                    logger.error(f"Error generating vertical 4x6 format: {str(e)}")
+                                    import traceback
+                                    error_trace = traceback.format_exc()
+                                    logger.error(error_trace)
+                                    st.session_state[house_4x6_vertical_cache_key] = None
+                                    st.error(f"⚠️ Error generating vertical 4x6 format: {str(e)}")
+                            
+                            # Show button if we have a valid buffer
+                            if house_4x6_vertical_buffer:
+                                st.download_button(
+                                    "House in 4x6inch (Vertical)",
+                                    data=house_4x6_vertical_buffer,
+                                    file_name=f"House_Labels_4x6_Vertical_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                    mime="application/pdf",
+                                    key=f"download_house_4x6_vertical_{house_key_suffix}",
+                                    use_container_width=True
+                                )
                         else:
                             st.caption("No House labels")
                     

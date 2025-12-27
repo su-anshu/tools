@@ -1456,6 +1456,200 @@ def generate_triple_label_combined(master_df, nutrition_row, product_name, metho
         return None
 
 
+def reformat_labels_to_4x6_vertical(house_buffer):
+    """
+    Reformat House labels into 4x6 inch PDFs with 3 labels stacked vertically (rotated 90°).
+    
+    Uses image-based rotation (PIL Image.rotate) for reliable rotation.
+    
+    - Input: House labels (one per page, typically 50mm × 100mm or 100mm × 150mm)
+    - Output: 4×6 inch pages with 3 labels stacked vertically (top/middle/bottom)
+    - Labels are rotated 90° clockwise to fit better
+    
+    Args:
+        house_buffer: BytesIO buffer containing House labels (one per page)
+    
+    Returns:
+        BytesIO buffer with reformatted 4x6 inch PDF (vertical layout, 3 per page), or None if error
+    """
+    try:
+        logger.info("Starting reformat_labels_to_4x6_vertical")
+        if house_buffer is None:
+            logger.warning("house_buffer is None")
+            return None
+        
+        # Check if buffer has content
+        house_buffer.seek(0)
+        buffer_content = house_buffer.read()
+        if len(buffer_content) == 0:
+            logger.warning("house_buffer is empty")
+            return None
+        logger.info(f"Buffer has {len(buffer_content)} bytes")
+        house_buffer.seek(0)
+        
+        # Open source PDF with House labels
+        with safe_pdf_context(buffer_content) as src_doc:
+            if len(src_doc) == 0:
+                logger.warning("Source PDF has no pages")
+                return None
+            logger.info(f"Source PDF has {len(src_doc)} pages")
+            
+            # Get first page dimensions to calculate scaling
+            first_page = src_doc[0]
+            sW, sH = first_page.rect.width, first_page.rect.height
+            logger.info(f"First page dimensions: {sW:.2f}pt × {sH:.2f}pt")
+            
+            # 4x6 inch page dimensions in points (1 inch = 72 points)
+            PAGE_WIDTH = 4 * 72.0   # 288pt
+            PAGE_HEIGHT = 6 * 72.0  # 432pt
+            
+            # Margins and gap (vertical layout)
+            MARGIN_X = 4.0   # 4pt margin on left and right
+            MARGIN_Y = 1.0   # 1pt margin on top and bottom
+            GAP_Y = 4.0      # 4pt gap between labels (vertical gap)
+            
+            # Calculate available space for labels (vertical stacking - 3 labels per page)
+            # Need 2 gaps for 3 labels: gap1 between label1-label2, gap2 between label2-label3
+            total_avail_h = PAGE_HEIGHT - (2 * MARGIN_Y) - (2 * GAP_Y)  # 432 - 2 - 8 = 422pt
+            slot_h = total_avail_h / 3.0  # ~140.67pt per label slot (3 labels stacked)
+            slot_w = PAGE_WIDTH - (2 * MARGIN_X)  # 288 - 8 = 280pt (full width per label)
+            
+            # Calculate scale to fit label in slot (maintain aspect ratio)
+            # Labels will be rotated 90°, so we swap dimensions for calculation
+            # After rotation: original width becomes height, original height becomes width
+            scale = min(slot_w / sH, slot_h / sW)  # Note: swapped sW and sH for rotation
+            draw_w = sH * scale  # After rotation, original height becomes width
+            draw_h = sW * scale  # After rotation, original width becomes height
+            logger.info(f"Scale: {scale:.4f}, Draw size: {draw_w:.2f}pt × {draw_h:.2f}pt, Slot: {slot_w:.2f}pt × {slot_h:.2f}pt")
+            
+            # Convert all pages to images and rotate them
+            rotated_images = []
+            for i in range(len(src_doc)):
+                try:
+                    # Convert page to image
+                    page = src_doc[i]
+                    pix = page.get_pixmap(dpi=600)
+                    img = Image.open(BytesIO(pix.tobytes("png")))
+                    
+                    # Rotate 90° clockwise (-90 degrees)
+                    rotated_img = img.rotate(-90, expand=True)
+                    rotated_images.append(rotated_img)
+                    logger.debug(f"Converted and rotated page {i+1}")
+                except Exception as e:
+                    logger.error(f"Error converting page {i+1} to image: {str(e)}")
+                    return None
+            
+            # Create output PDF using ReportLab Canvas
+            output_buffer = BytesIO()
+            c = canvas.Canvas(output_buffer, pagesize=(PAGE_WIDTH, PAGE_HEIGHT))
+            
+            total_pages = len(rotated_images)
+            logger.info(f"Processing {total_pages} rotated images")
+            
+            # Process labels in groups of 3 (3 per page, stacked top/middle/bottom)
+            for i in range(0, total_pages, 3):
+                # Top Label (first of the group)
+                y_top = MARGIN_Y + (slot_h - draw_h) / 2.0
+                x_top = MARGIN_X + (slot_w - draw_w) / 2.0
+                
+                # Convert rotated image to format for ReportLab
+                img_buffer_top = BytesIO()
+                rotated_images[i].save(img_buffer_top, format='PNG', dpi=(600, 600))
+                img_buffer_top.seek(0)
+                
+                c.drawImage(ImageReader(img_buffer_top), x_top, y_top, width=draw_w, height=draw_h)
+                
+                # Middle Label (second of the group, if exists)
+                if i + 1 < total_pages:
+                    y_middle = MARGIN_Y + slot_h + GAP_Y + (slot_h - draw_h) / 2.0
+                    x_middle = MARGIN_X + (slot_w - draw_w) / 2.0
+                    
+                    # Convert rotated image to format for ReportLab
+                    img_buffer_middle = BytesIO()
+                    rotated_images[i + 1].save(img_buffer_middle, format='PNG', dpi=(600, 600))
+                    img_buffer_middle.seek(0)
+                    
+                    c.drawImage(ImageReader(img_buffer_middle), x_middle, y_middle, width=draw_w, height=draw_h)
+                
+                # Bottom Label (third of the group, if exists)
+                if i + 2 < total_pages:
+                    y_bottom = MARGIN_Y + (2 * slot_h) + (2 * GAP_Y) + (slot_h - draw_h) / 2.0
+                    x_bottom = MARGIN_X + (slot_w - draw_w) / 2.0
+                    
+                    # Convert rotated image to format for ReportLab
+                    img_buffer_bottom = BytesIO()
+                    rotated_images[i + 2].save(img_buffer_bottom, format='PNG', dpi=(600, 600))
+                    img_buffer_bottom.seek(0)
+                    
+                    c.drawImage(ImageReader(img_buffer_bottom), x_bottom, y_bottom, width=draw_w, height=draw_h)
+                
+                c.showPage()
+            
+            c.save()
+            output_buffer.seek(0)
+            output_page_count = (total_pages + 2) // 3  # 3 labels per page
+            logger.info(f"Reformatted {total_pages} House labels into {output_page_count} 4x6 inch pages (vertical layout, 3 per page)")
+            return output_buffer
+            
+    except Exception as e:
+        logger.error(f"Error reformatting House labels to 4x6 vertical: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None
+
+
+def create_4x6_vertical_from_single_label(single_label_pdf):
+    """
+    Create a 4x6 inch PDF with 3 copies of a single label (stacked top/middle/bottom, rotated 90°).
+    
+    This is a convenience function for the label generator tool where user selects a product
+    and wants a 4x6 inch PDF with 3 copies of that product's House label.
+    
+    Args:
+        single_label_pdf: BytesIO buffer containing a single House label PDF (one page)
+    
+    Returns:
+        BytesIO buffer with 4x6 inch PDF containing 3 rotated copies, or None if error
+    """
+    try:
+        logger.info("Creating 4x6 vertical from single label")
+        if single_label_pdf is None:
+            logger.warning("single_label_pdf is None")
+            return None
+        
+        # Check if buffer has content
+        single_label_pdf.seek(0)
+        buffer_content = single_label_pdf.read()
+        if len(buffer_content) == 0:
+            logger.warning("single_label_pdf is empty")
+            return None
+        single_label_pdf.seek(0)
+        
+        # Create a temporary PDF with 3 copies of the label (duplicate the page)
+        with safe_pdf_context(buffer_content) as src_doc:
+            if len(src_doc) == 0:
+                logger.warning("Source PDF has no pages")
+                return None
+            
+            # Create a new PDF with 3 copies of the label
+            temp_doc = fitz.open()
+            temp_doc.insert_pdf(src_doc)  # First copy
+            temp_doc.insert_pdf(src_doc)  # Second copy
+            temp_doc.insert_pdf(src_doc)  # Third copy
+            temp_buffer = BytesIO()
+            temp_doc.save(temp_buffer)
+            temp_buffer.seek(0)
+            temp_doc.close()
+        
+        # Now use the existing function to reformat (which handles 3 labels per page)
+        return reformat_labels_to_4x6_vertical(temp_buffer)
+        
+    except Exception as e:
+        logger.error(f"Error creating 4x6 vertical from single label: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None
+
 
 # --- EXISTING FUNCTIONS CONTINUE BELOW ---
 
@@ -1944,6 +2138,32 @@ def label_generator_tool():
                                         key="download_triple"
 
                                     )
+                                    
+                                    # House in 4x6 inch format (Vertical - 2 copies stacked top/bottom, rotated)
+                                    try:
+                                        # Create a copy of the buffer content to avoid issues with Streamlit reading it
+                                        triple_pdf.seek(0)
+                                        triple_pdf_copy = BytesIO(triple_pdf.read())
+                                        triple_pdf.seek(0)  # Reset original for download button
+                                        
+                                        house_4x6_vertical = create_4x6_vertical_from_single_label(triple_pdf_copy)
+                                        
+                                        if house_4x6_vertical:
+                                            st.download_button(
+                                                "House in 4x6inch (Vertical)",
+                                                data=house_4x6_vertical,
+                                                file_name=f"{safe_name}_{selected_weight}_4x6_Vertical.pdf",
+                                                mime="application/pdf",
+                                                use_container_width=True,
+                                                key="download_house_4x6_vertical"
+                                            )
+                                        else:
+                                            logger.warning("Failed to generate 4x6 vertical format")
+                                    except Exception as e:
+                                        logger.error(f"Error generating 4x6 vertical: {str(e)}")
+                                        import traceback
+                                        logger.error(traceback.format_exc())
+                                        st.warning(f"Could not generate 4x6 vertical format: {str(e)}")
 
                                 else:
 

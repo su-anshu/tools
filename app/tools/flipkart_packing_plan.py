@@ -9,7 +9,7 @@ from datetime import datetime
 import logging
 import hashlib
 from app.sidebar import MASTER_FILE, BARCODE_PDF_PATH
-from app.tools.label_generator import generate_combined_label_pdf_direct, generate_pdf, generate_triple_label_combined
+from app.tools.label_generator import generate_combined_label_pdf_direct, generate_pdf, generate_triple_label_combined, reformat_labels_to_4x6_vertical
 from app.tools.product_label_generator import create_label_pdf, create_pair_label_pdf
 from app.data_loader import load_nutrition_data_silent
 from app.utils import (
@@ -2148,6 +2148,46 @@ def flipkart_packing_plan_tool():
                             key=f"download_house_labels_{house_key_suffix}",
                             use_container_width=True
                         )
+                        
+                        # House in 4x6 inch format (Vertical - top/bottom with rotation)
+                        # Check if reformatted vertical version is cached
+                        house_4x6_vertical_cache_key = f'flipkart_house_4x6_vertical_buffer_{data_hash}'
+                        
+                        # Always try to generate/retrieve the vertical format
+                        house_4x6_vertical_buffer = None
+                        if house_4x6_vertical_cache_key in st.session_state:
+                            house_4x6_vertical_buffer = st.session_state[house_4x6_vertical_cache_key]
+                        
+                        # If not cached or None, generate it
+                        if house_4x6_vertical_buffer is None:
+                            try:
+                                logger.info(f"Generating vertical 4x6 format for {house_count} labels...")
+                                house_4x6_vertical_buffer = reformat_labels_to_4x6_vertical(house_buffer)
+                                if house_4x6_vertical_buffer:
+                                    st.session_state[house_4x6_vertical_cache_key] = house_4x6_vertical_buffer
+                                    logger.info(f"Successfully generated vertical 4x6 format, cached with key: {house_4x6_vertical_cache_key}")
+                                else:
+                                    st.session_state[house_4x6_vertical_cache_key] = None
+                                    logger.warning("reformat_labels_to_4x6_vertical returned None")
+                                    st.warning("⚠️ Could not generate vertical 4x6 format. The function returned None.")
+                            except Exception as e:
+                                logger.error(f"Error generating vertical 4x6 format: {str(e)}")
+                                import traceback
+                                error_trace = traceback.format_exc()
+                                logger.error(error_trace)
+                                st.session_state[house_4x6_vertical_cache_key] = None
+                                st.error(f"⚠️ Error generating vertical 4x6 format: {str(e)}")
+                        
+                        # Show button if we have a valid buffer
+                        if house_4x6_vertical_buffer:
+                            st.download_button(
+                                "House in 4x6inch (Vertical)",
+                                data=house_4x6_vertical_buffer,
+                                file_name=f"Flipkart_House_Labels_4x6_Vertical_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                mime="application/pdf",
+                                key=f"download_house_4x6_vertical_{house_key_suffix}",
+                                use_container_width=True
+                            )
                     else:
                         st.caption("No House labels")
                 
